@@ -30,9 +30,15 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
     throw new ApiError(0, 'NETWORK', 'Server nije dostupan. Proverite mrežu i da li je POS servis pokrenut.');
   }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : undefined;
+  let data: any;
+  try { data = text ? JSON.parse(text) : undefined; } catch { data = undefined; }
   if (!res.ok) {
     const e = data?.error ?? {};
+    // Odgovor bez našeg formata greške = nije stigao od API-ja (npr. proxy ne može da dođe do servera).
+    if (!data?.error && res.status >= 500) {
+      throw new ApiError(res.status, 'API_UNREACHABLE',
+        'POS API server nije dostupan. Proverite da li je pokrenut (npm run dev:api) i da li radi baza podataka.');
+    }
     if (res.status === 401 && path !== '/auth/pin' && path !== '/auth/login') onUnauthorized();
     throw new ApiError(res.status, e.code ?? 'HTTP_ERROR', e.message ?? `Greška ${res.status}`, e.details, e.requestId);
   }
