@@ -1,7 +1,7 @@
 # Instalacija i pokretanje
 
 ## Razvoj (Linux/macOS/Windows)
-Preduslovi: Node.js 20+ (testirano na 22), PostgreSQL 16 (lokalno ili `docker compose up -d db`).
+Preduslovi: Node.js 20.12+ (testirano na 22), PostgreSQL 16 (lokalno ili `docker compose up -d db`).
 
 ```bash
 npm install                       # u korenu repozitorijuma (npm workspaces)
@@ -15,6 +15,28 @@ npm run dev:web                   # http://localhost:5173 (proxy /api → 3000)
 ```
 
 Prvi ulazak: prijava `admin@demo.local` / `Demo123!` → izbor kase ("Kasa 1 – Šank") → PIN prijava. Demo PIN-ovi: 1111 konobar, 2222 kasir, 9999 menadžer.
+
+## Windows — razvoj
+1. Instalirati **PostgreSQL 16** (EDB installer sa postgresql.org). Zapamtiti lozinku korisnika `postgres`, port ostaviti 5432.
+2. Napraviti korisnika i baze (PowerShell; putanja zavisi od verzije):
+   ```powershell
+   & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -h localhost -c "CREATE USER pos WITH PASSWORD 'pos_dev' CREATEDB;"
+   & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -h localhost -c "CREATE DATABASE pos OWNER pos;"
+   & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -h localhost -c "CREATE DATABASE pos_test OWNER pos;"
+   ```
+3. U korenu repozitorijuma, svaku komandu u svom redu (Windows PowerShell 5 ne podržava `&&`; može i `;`):
+   ```powershell
+   npm install
+   Copy-Item apps/api/.env.example apps/api/.env
+   npm run db:migrate
+   npm run db:seed
+   npm run dev:api
+   ```
+   U drugom terminalu: `npm run dev:web`, pa otvoriti http://localhost:5173.
+
+`apps/api/.env` se učitava automatski (API, migracije i seed), bez obzira iz kog foldera se komanda pokreće. Ako migracija prijavi `Uzrok: connect ECONNREFUSED 127.0.0.1:5432`, PostgreSQL servis nije pokrenut (Services → postgresql-x64-16 → Start). Ako prijavi grešku lozinke, `DATABASE_URL` u `.env` ne odgovara korisniku iz koraka 2.
+
+npm na novijim verzijama može upozoriti `allow-scripts` za `esbuild`. Ako `npm run dev:web` javi da esbuild nije instaliran: `npm approve-scripts esbuild`, pa ponovo `npm install`.
 
 ## Docker Compose (server u lokalu ili na udaljenom serveru)
 ```bash

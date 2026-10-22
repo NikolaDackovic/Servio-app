@@ -1,3 +1,4 @@
+import './load-env';
 import { Logger } from '@nestjs/common';
 import { loadConfig } from './config';
 import { createApp } from './app';

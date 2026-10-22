@@ -1,4 +1,5 @@
 /** Primena SQL migracija iz ./migrations (koristi se i u produkciji i u testovima). */
+import '../load-env';
 import path from 'path';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -22,7 +23,7 @@ if (require.main === module) {
   runMigrations(url)
     .then(() => console.log('Migracije primenjene.'))
     .catch((e) => {
-      console.error('Greška pri migraciji:', e.message);
+      console.error('Greška pri migraciji:', e.message, e.cause?.message ? `\nUzrok: ${e.cause.message}` : '');
       process.exit(1);
     });
 }

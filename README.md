@@ -5,12 +5,16 @@ Modularni POS sistem: kasa, backoffice, (uskoro) KDS, štampa, lager i integraci
 **Status: iteracija 1 — prvi vertikalni tok radi end-to-end, sa testovima nad pravom bazom.** Naplata je isključivo u **TEST režimu**: nema platnog terminala ni fiskalizacije, i aplikacija to jasno prikazuje. Nije za produkcionu upotrebu u lokalu.
 
 ## Brzi start
-```bash
+Preduslovi: Node.js 20.12+ i PostgreSQL 16 sa korisnikom `pos` i bazama `pos` i `pos_test` (vidi [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#windows--razvoj)).
+
+Komande su u zasebnim redovima, pa rade i u Windows PowerShell 5 (koji ne podržava `&&`):
+```
 npm install
 cp apps/api/.env.example apps/api/.env
-npm run db:migrate && npm run db:seed
+npm run db:migrate
+npm run db:seed
 npm run dev:api      # :3000  (Swagger: http://localhost:3000/api/docs)
-npm run dev:web      # :5173
+npm run dev:web      # u drugom terminalu, :5173
 npm test             # 29 testova
 ```
 Prijava: `admin@demo.local` / `Demo123!` → izaberite "Kasa 1 – Šank" → PIN 2222 (kasir), 1111 (konobar), 9999 (menadžer). **Demo nalozi su samo za razvoj.**

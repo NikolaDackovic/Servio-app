@@ -8,6 +8,7 @@
  *   PIN 2222 — Ana (Kasir)
  *   PIN 9999 — Jelena (Menadžer)
  */
+import '../load-env';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
@@ -102,5 +103,5 @@ if (require.main === module) {
   }
   seed(url, pepper)
     .then((r) => console.log(r.created ? `Demo podaci kreirani: ${JSON.stringify(r)}` : 'Demo podaci već postoje — preskačem.'))
-    .catch((e) => { console.error('Seed nije uspeo:', e.message); process.exit(1); });
+    .catch((e) => { console.error('Seed nije uspeo:', e.message, e.cause?.message ? `\nUzrok: ${e.cause.message}` : ''); process.exit(1); });
 }
