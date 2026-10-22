@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, Category, fmt, fmtQty, newIdempotencyKey, Order, OrderItem, Product, qtyAtMostOne, stepQty, Table } from '../api';
 import { useAuth } from '../auth';
+import { useRealtime } from '../realtime';
 import { Empty, ErrorBox, Keypad, Modal, Spinner, useLoad, useRefresh, useToast } from '../ui';
 import { Checkout } from './Checkout';
 import { TransferDialog } from './MyShift';
@@ -18,6 +19,16 @@ export function OrderScreen({ orderId: initialId, onBack }: { orderId: string; o
   const { key } = useRefresh();
   const [orderId, setOrderId] = useState(initialId);
   const order = useLoad(() => api<Order>('GET', `/orders/${orderId}`), [orderId]);
+  // Status pripreme (KDS) i izmene sa drugih uređaja stižu u realnom vremenu — tiho osvežavanje bez treperenja.
+  useRealtime({
+    onEvent: (e) => {
+      if ((e.type === 'order.prep.updated' || e.type === 'order.updated') && e.data?.orderId === orderId) {
+        // starija verzija (odgovor koji je zakasnio) ne sme da pregazi noviji prikaz
+        api<Order>('GET', `/orders/${orderId}`).then((n) => order.setData((cur) => (cur && cur.id === n.id && cur.version > n.version ? cur : n))).catch(() => undefined);
+      }
+    },
+    onReconnect: () => { api<Order>('GET', `/orders/${orderId}`).then(order.setData).catch(() => undefined); },
+  });
   const cats = useLoad(() => api<Category[]>('GET', '/categories'), [key]);
   const prods = useLoad(() => api<{ data: Product[] }>('GET', '/products?pageSize=500').then((r) => r.data), [key]);
   const o = order.data;
@@ -163,6 +174,11 @@ export function OrderScreen({ orderId: initialId, onBack }: { orderId: string; o
               <span className="tt-name">{i.name}
                 {i.note && <small className="tag note">{i.note}</small>}
                 {i.status === 'VOIDED' && <small className="tag danger">storno: {i.voidReason}</small>}
+                {i.status === 'SENT' && i.prepStationName && (
+                  <small className={`prep ${(i.prepStatus ?? 'new').toLowerCase()}`} title={`Pripremna pozicija: ${i.prepStationName}`}>
+                    {i.prepStationName}: {PREP_LABEL[i.prepStatus ?? 'NEW'] ?? i.prepStatus}
+                  </small>
+                )}
               </span>
               <span className="tt-sum">{fmt(i.lineTotal)}</span>
               <span className="tt-state" title={i.status === 'SENT' ? `Poslato, tura ${i.sendBatch}` : i.status === 'NEW' ? 'Nije poslato' : 'Stornirano'}>
@@ -444,3 +460,5 @@ function VoidDialog({ title, onClose, onConfirm }: { title: string; onClose: () 
     </Modal>
   );
 }
+
+const PREP_LABEL: Record<string, string> = { NEW: 'primljeno', IN_PROGRESS: 'u pripremi', READY: 'spremno', DONE: 'izdato' };

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { addMoney, api, fmt, newIdempotencyKey, Table, time } from '../api';
 import { useAuth } from '../auth';
+import { useRealtime } from '../realtime';
 import { Empty, ErrorBox, Spinner, useLoad, useRefresh, useToast } from '../ui';
 
 const STATUS: Record<Table['status'], string> = { FREE: 'Slobodan', OCCUPIED: 'Zauzet', PARTIALLY_PAID: 'Delimično plaćen' };
@@ -17,7 +18,10 @@ export function Tables({ onOpenOrder, onGoToDay }: { onOpenOrder: (id: string) =
   const { me } = useAuth();
   const { key } = useRefresh();
   const day = useLoad(() => api('GET', '/business-days/current'), [key]);
-  const { data, error, loading, reload } = useLoad(() => api<Table[]>('GET', '/tables'), [key]);
+  const { data, error, loading, reload, setData } = useLoad(() => api<Table[]>('GET', '/tables'), [key]);
+  // Mapa se osvežava kada se bilo koji račun lokala promeni na drugom uređaju (tiho, bez treperenja).
+  const silent = () => api<Table[]>('GET', '/tables').then(setData).catch(() => undefined);
+  useRealtime({ onEvent: (e) => { if (e.type === 'order.updated') void silent(); }, onReconnect: () => void silent() });
   const [area, setArea] = useState<string>('');
   const [busy, setBusy] = useState<string | null>(null);
   const [, tick] = useState(0);

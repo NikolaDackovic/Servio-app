@@ -6,6 +6,6 @@ import path from 'path';
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@shared': path.resolve(__dirname, '../web/src') } },
-  server: { host: true, port: 5174, strictPort: true, proxy: { '/api': 'http://localhost:3000' }, fs: { allow: ['..'] } },
+  server: { host: true, port: 5174, strictPort: true, proxy: { '/api': { target: 'http://localhost:3000', ws: true } }, fs: { allow: ['..'] } },
   preview: { port: 4174 },
 });

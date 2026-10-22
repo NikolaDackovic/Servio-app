@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, ApiError, cmpMoney, Discount, fmt, newIdempotencyKey, Order, PaymentMethod, subMoney } from '../api';
+import { api, ApiError, cmpMoney, Discount, fmt, newIdempotencyKey, Order, PaymentMethod, subMoney, fiscalText } from '../api';
 import { useAuth } from '../auth';
 import { ErrorBox, Keypad, Modal, Spinner, useLoad, useRefresh, useToast } from '../ui';
 
@@ -72,7 +72,9 @@ export function Checkout({ order: initial, onClose, onPaid }: { order: Order; on
     try {
       const r = await api('POST', `/orders/${o.id}/settle`, { parts, idempotencyKey: idemKey, expectedVersion: o.version });
       const ch = r.payments.find((p: any) => p.change !== '0.00')?.change;
-      if (ch) toast('ok', `Vratiti kusur: ${fmt(ch)}`);
+      const fx = r.order.status === 'PAID' ? fiscalText(r.order.fiscal) : null;
+      if (ch) toast('ok', `Vratiti kusur: ${fmt(ch)}${fx ? ` · ${fx.text}` : ''}`);
+      else if (fx) toast(fx.cls === 'failed' || fx.cls === 'pending' ? 'err' : 'ok', `Naplaćeno. ${fx.text}`);
       onPaid(r.order);
     } catch (e) {
       setError(e);

@@ -65,7 +65,9 @@ function ProductForm({ product, categories, taxes, onClose, onSaved }: {
     code: product?.code ?? '', name: product?.name ?? '', price: product?.price ?? '',
     categoryId: product?.categoryId ?? categories[0]?.id, taxRateId: product?.taxRateId ?? taxes[0]?.id,
     barcode: product?.barcode ?? '', active: product?.active ?? true,
+    prepStationId: (product as any)?.prepStationId ?? '',
   });
+  const stations = useLoad(() => api<{ id: string; name: string; active: boolean }[]>('GET', '/prep-stations').catch(() => []), []);
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const priceOk = /^\d{1,10}(\.\d{1,2})?$/.test(f.price);
@@ -73,7 +75,7 @@ function ProductForm({ product, categories, taxes, onClose, onSaved }: {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(undefined);
-    const body: any = { name: f.name.trim(), price: f.price, categoryId: f.categoryId, taxRateId: f.taxRateId };
+    const body: any = { name: f.name.trim(), price: f.price, categoryId: f.categoryId, taxRateId: f.taxRateId, prepStationId: f.prepStationId || null };
     if (f.barcode) body.barcode = f.barcode;
     try {
       if (product) await api('PATCH', `/products/${product.id}`, { ...body, active: f.active });
@@ -95,6 +97,9 @@ function ProductForm({ product, categories, taxes, onClose, onSaved }: {
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <label>Poreska stopa<select className="input" value={f.taxRateId} onChange={(e) => setF({ ...f, taxRateId: e.target.value })}>
           {taxes.map((t) => <option key={t.id} value={t.id}>{t.label} – {t.name} ({t.rate}%)</option>)}</select></label>
+        <label>Pripremna pozicija<select className="input" value={f.prepStationId} onChange={(e) => setF({ ...f, prepStationId: e.target.value })}>
+          <option value="">Prema kategoriji</option>
+          {stations.data?.filter((st) => st.active).map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}</select></label>
         <label>Barkod<input className="input" value={f.barcode} maxLength={32} onChange={(e) => setF({ ...f, barcode: e.target.value })} /></label>
         {product && <label className="check"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Aktivan</label>}
         {product && product.price !== f.price && priceOk && <div className="notice">Promena cene se beleži u istoriji cena. Već dodate stavke zadržavaju staru cenu.</div>}

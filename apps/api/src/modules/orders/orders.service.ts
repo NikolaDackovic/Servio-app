@@ -186,7 +186,8 @@ export class OrdersService {
   // ---------- izmene ----------
 
   async create(u: AuthUser, dto: CreateOrderDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: null } });
       if (dto.idempotencyKey) {
         const [dup] = await tx.select({ id: orders.id }).from(orders)
           .where(and(eq(orders.locationId, u.locationId), eq(orders.idempotencyKey, dto.idempotencyKey)));
@@ -217,7 +218,8 @@ export class OrdersService {
   }
 
   async addItem(u: AuthUser, orderId: string, dto: AddItemDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: orderId } });
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       const [p] = await tx
         .select({ product: products, taxLabel: taxRates.label, taxRate: taxRates.rate })
@@ -325,7 +327,8 @@ export class OrdersService {
 
   /** Otkazivanje je moguće samo ako nema naplate i nema aktivnih poslatih stavki (njih prvo stornirati). */
   async cancel(u: AuthUser, orderId: string, dto: CancelOrderDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: orderId } });
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       if (!dec(o.paidTotal).isZero()) throw Conflict('ORDER_HAS_PAYMENTS', 'Porudžbina ima naplatu i ne može se otkazati');
       const [{ c }] = await tx.select({ c: sql<number>`count(*)::int` }).from(orderItems)
@@ -501,7 +504,8 @@ export class OrdersService {
   // ---------- ture, prebacivanje stavki, spajanje, storno računa ----------
 
   async rename(u: AuthUser, orderId: string, dto: RenameOrderDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: orderId } });
       const o = await this.lockOrder(tx, u, orderId);
       await tx.update(orders).set({ tabName: dto.tabName?.trim() || null, version: o.version + 1, updatedAt: new Date() })
         .where(eq(orders.id, o.id));
@@ -519,7 +523,8 @@ export class OrdersService {
     if (!dto.toOrderId && !dto.toTableId && dto.toTabName === undefined) {
       throw Invalid('MOVE_TARGET_REQUIRED', 'Izaberite odredište: postojeći račun, sto ili novu turu');
     }
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: orderId } });
       let targetId = dto.toOrderId ?? null;
       if (!targetId) {
         // nova tura: na izabranom stolu, ili na istom stolu kao izvor
@@ -557,7 +562,8 @@ export class OrdersService {
    * Izvorni računi ne smeju imati naplatu; posle spajanja dobijaju status MERGED i vezu na ciljni.
    */
   async merge(u: AuthUser, targetId: string, dto: MergeOrdersDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: targetId } });
       const ids = [...new Set([targetId, ...dto.fromOrderIds])].sort();
       if (ids.length < 2) throw Invalid('MERGE_NEEDS_TWO', 'Izaberite bar jedan račun za spajanje');
       const locked: Record<string, OrderRow> = {};
@@ -621,7 +627,8 @@ export class OrdersService {
    * Sve-ili-ništa: ako i jedan račun ne može da se prebaci, ništa se ne menja.
    */
   async transfer(u: AuthUser, dto: TransferOrdersDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
+      ev.push({ type: 'order.updated', locationId: u.locationId, data: { orderId: null } });
       const [target] = await tx.select({ id: users.id, fullName: users.fullName, active: users.active, permissions: roles.permissions })
         .from(users).innerJoin(roles, eq(roles.id, users.roleId))
         .where(and(eq(users.id, dto.toUserId), eq(users.organizationId, u.organizationId)));

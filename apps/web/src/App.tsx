@@ -8,6 +8,7 @@ import { OrderScreen } from './pages/OrderScreen';
 import { Orders } from './pages/Orders';
 import { MyShift } from './pages/MyShift';
 import { Day } from './pages/Day';
+import { Kds } from './pages/Kds';
 
 type Overlay = null | 'receipts' | 'myshift' | 'shift' | 'pricelist';
 
@@ -64,6 +65,9 @@ export function App() {
   if (!me.user.deviceId && !storage.deviceId && !skipDevice && can('user.manage')) {
     return <DeviceSetup onSkip={() => setSkipDevice(true)} />;
   }
+  // Uređaj registrovan kao KDS prikazuje samo ekran pripreme.
+  const device = me.devices.find((d) => d.id === me.user.deviceId);
+  if (device?.kind === 'KDS') return <Kds />;
   if (orderId) return <OrderScreen orderId={orderId} onBack={() => setOrderId(null)} />;
 
   const closeOverlay = () => { setOverlay(null); setReview(null); };

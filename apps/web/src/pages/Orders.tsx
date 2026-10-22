@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api, fmt, fmtQty, METHOD_LABEL, Order, time } from '../api';
+import { api, fmt, fmtQty, METHOD_LABEL, Order, time, fiscalText, newIdempotencyKey } from '../api';
 import { Empty, ErrorBox, Modal, Spinner, useLoad } from '../ui';
 
 const LABEL = { OPEN: 'Otvoren', PAID: 'Plaćen', CANCELLED: 'Otkazan', MERGED: 'Spojen' } as const;
@@ -77,7 +77,9 @@ export function ReceiptDetail({ orderId, onClose, token }: { orderId: string; on
     <Modal title={o.data ? `Račun #${o.data.number} — ${o.data.tableName ?? 'Brza prodaja'}` : 'Račun'} onClose={onClose} wide>
       {o.loading ? <Spinner /> : o.error ? <ErrorBox error={o.error} /> : o.data && (
         <>
-          <div className="test-banner">Interni pregled računa (TEST režim) — nije fiskalni račun.</div>
+          <div className="test-banner">Interni pregled računa (TEST režim naplate).</div>
+          {o.data.status === 'PAID' && <div className={`fiscal ${fiscalText(o.data.fiscal).cls}`}>{fiscalText(o.data.fiscal).text}</div>}
+          <PrintReceipt orderId={orderId} token={token} />
           <div className="muted small">
             Konobar: {o.data.waiterName} · otvoren {new Date(o.data.openedAt).toLocaleString('sr-Latn-RS')}
             {o.data.closedAt && ` · zatvoren ${new Date(o.data.closedAt).toLocaleString('sr-Latn-RS')}`} · <span className={`badge ${o.data.status.toLowerCase()}`}>{LABEL[o.data.status]}</span>
@@ -152,4 +154,30 @@ function describe(e: any): string {
     case 'order.rename': return `: ${d.tabName ?? '—'}`;
     default: return '';
   }
+}
+
+/**
+ * Štampa računa/predračuna na štampaču ove kase (preko Print Bridge-a).
+ * Prikazuje stvarno stanje zadatka iz reda — "poslato u red" nije isto što i "odštampano".
+ */
+function PrintReceipt({ orderId, token }: { orderId: string; token?: string }) {
+  const [job, setJob] = useState<any>(null);
+  const [err, setErr] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const print = async () => {
+    setBusy(true); setErr(undefined);
+    try { setJob((await api('POST', `/orders/${orderId}/print-receipt`, { idempotencyKey: newIdempotencyKey('rcpt') }, token)).job); }
+    catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  const LABEL: Record<string, string> = {
+    PENDING: 'u redu — čeka Print Bridge', PRINTING: 'štampa u toku', PRINTED: 'štampač je primio blok',
+    SIMULATED: 'SIMULACIJA — ništa nije odštampano na papiru', FAILED: 'štampa nije uspela',
+  };
+  return (
+    <div className="row" style={{ gap: 8, alignItems: 'center', margin: '6px 0' }}>
+      <button className="btn" disabled={busy} onClick={print}>🖨 {busy ? 'Šaljem…' : job ? 'Štampaj ponovo (kopija)' : 'Štampaj račun'}</button>
+      {job && <span className="muted small">Zadatak {job.id.slice(0, 8)}: {LABEL[job.status] ?? job.status}{job.payload?.notFiscalNotice ? ` · na papiru: „${job.payload.notFiscalNotice}“` : ''}</span>}
+      {err !== undefined && <ErrorBox error={err} />}
+    </div>
+  );
 }

@@ -109,7 +109,8 @@ export interface Me {
 }
 export interface Product { id: string; code: string; name: string; unit: string; price: string; color: string | null; categoryId: string; taxLabel: string; taxRate: string; active: boolean; taxRateId: string; barcode: string | null }
 export interface Category { id: string; name: string; color: string | null; sortOrder: number; active: boolean }
-export interface OrderItem { id: string; productId: string; name: string; unitPrice: string; quantity: string; lineTotal: string; discountAmount: string; note: string | null; status: 'NEW' | 'SENT' | 'VOIDED'; sendBatch: number | null; voidReason: string | null; taxLabel: string }
+export interface OrderItem { id: string; productId: string; name: string; unitPrice: string; quantity: string; lineTotal: string; discountAmount: string; note: string | null; status: 'NEW' | 'SENT' | 'VOIDED'; sendBatch: number | null; voidReason: string | null; taxLabel: string;
+  prepStationId?: string | null; prepStationName?: string | null; prepStatus?: 'NEW' | 'IN_PROGRESS' | 'READY' | 'DONE' | null }
 export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'REPRESENTATION';
 export const METHOD_LABEL: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman', REPRESENTATION: 'Reprezentacija' };
 export interface Payment { id: string; method: string; amount: string; tendered: string | null; change: string; mode: string; createdAt: string }
@@ -118,8 +119,25 @@ export interface Order {
   subtotal: string; discountTotal: string; discountPercent: string; discountId: string | null; tabName: string | null; waiterId: string;
   buyerIdType: string | null; buyerId: string | null; buyerIdLabel: string | null; buyerOptionalBasis: string | null; buyerOptionalValue: string | null;
   tableId: string | null; tableName: string | null; waiterName: string; version: number; openedAt: string; closedAt: string | null;
+  fiscal: Fiscal | null;
   items: OrderItem[]; payments: Payment[]; taxSummary: { label: string; rate: string; gross: string; tax: string; net: string }[];
 }
 export interface Table { id: string; name: string; area: string; seats: number; posX: number; posY: number; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string; waiterId: string; tabName: string | null }[] }
 
 export interface Discount { id: string; name: string; percent: string; active: boolean; sortOrder: number }
+
+/** Stanje fiskalizacije računa. Račun je fiskalizovan SAMO ako je status SIGNED i isTest = false. */
+export interface Fiscal {
+  id: string; provider: string; isTest: boolean; invoiceType: string; status: 'PENDING' | 'SIGNED' | 'FAILED' | 'NOT_REQUIRED';
+  invoiceNumber: string | null; verificationUrl: string | null; attempts: number; lastError: string | null; signedAt: string | null;
+}
+
+/** Kratak, istinit opis stanja fiskalizacije (bez tvrdnje da je račun fiskalni kada nije). */
+export function fiscalText(f: Fiscal | null | undefined): { cls: string; text: string } {
+  if (!f) return { cls: 'none', text: 'Nije fiskalizovano — fiskalizacija nije uključena.' };
+  if (f.status === 'SIGNED' && f.isTest) return { cls: 'signed-test', text: `TEST fiskalizacija: ${f.invoiceNumber} — ovo NIJE fiskalni račun.` };
+  if (f.status === 'SIGNED') return { cls: 'signed', text: `Fiskalizovano: ${f.invoiceNumber}` };
+  if (f.status === 'PENDING') return { cls: 'pending', text: `Fiskalizacija na čekanju (pokušaja: ${f.attempts})${f.lastError ? ` — ${f.lastError}` : ''}. Račun još NIJE fiskalizovan.` };
+  if (f.status === 'FAILED') return { cls: 'failed', text: `Fiskalizacija NIJE uspela: ${f.lastError ?? 'nepoznata greška'}. Potrebna je ručna provera (ADMIN → Fiskalizacija).` };
+  return { cls: 'none', text: 'Fiskalizacija nije potrebna.' };
+}

@@ -408,3 +408,51 @@ button.pick { width: 100%; text-align: left; font: inherit; color: inherit; }
 }
 .act { display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .badge.merged { background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted); }
+
+/* ---------- KDS ---------- */
+.kds { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+.kds-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.kds-stations, .kds-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.kds-stations .seg-btn { font-size: 18px; padding: 10px 18px; }
+.btn.warn { background: var(--warn); border-color: var(--warn); color: #1c1606; }
+.conn { font-size: 13px; font-weight: 700; }
+.conn.open { color: var(--ok); } .conn.connecting { color: var(--warn); } .conn.lost { color: var(--danger); }
+.kds-lost { background: var(--danger); color: #fff; font-weight: 700; padding: 12px 16px; animation: kdsPulse 1.6s ease-in-out infinite; }
+@keyframes kdsPulse { 50% { opacity: .75; } }
+.kds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 14px; align-items: start; }
+.kds-grid .empty { grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--muted); font-size: 20px; }
+.ticket { background: var(--panel); border: 2px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; }
+.ticket.age-fresh { border-color: var(--line); }
+.ticket.age-warn { border-color: var(--warn); }
+.ticket.age-late { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 35%, transparent); }
+.ticket.st-ready, .ticket.age-ok { border-color: var(--ok); }
+.ticket-head { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; background: var(--panel-2, color-mix(in srgb, var(--text) 6%, transparent)); }
+.ticket-head strong { font-size: 18px; }
+.ticket-time { text-align: right; } .ticket-time strong { font-size: 22px; }
+.ticket.age-warn .ticket-time strong { color: var(--warn); } .ticket.age-late .ticket-time strong { color: var(--danger); }
+.ticket-status { padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ticket.st-in_progress .ticket-status { color: var(--info); } .ticket.st-ready .ticket-status { color: var(--ok); }
+.ticket-items { list-style: none; margin: 0; padding: 4px 6px; }
+.ticket-items button { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; text-align: left; background: none; border: 0; color: var(--text); padding: 8px 6px; font-size: 18px; border-radius: 8px; cursor: pointer; min-height: 44px; }
+.ticket-items button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.ticket-items .q { font-weight: 800; }
+.ticket-items em { display: block; font-style: normal; font-size: 14px; color: var(--warn); font-weight: 700; }
+.ticket-items li.ready .n { text-decoration: line-through; color: var(--muted); }
+.ticket-items li.ready .c { color: var(--ok); font-weight: 800; }
+.ticket-items li.voided .n { text-decoration: line-through; color: var(--danger); }
+.ticket-items li.voided em { color: var(--danger); }
+.ticket-items li.voided .c { color: var(--danger); }
+.ticket-actions { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.ticket-actions .btn { flex: 1; min-height: 48px; font-size: 16px; white-space: nowrap; padding-inline: 8px; }
+
+/* status pripreme na kasi */
+.prep { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 999px; margin-left: 6px; vertical-align: middle; background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
+.prep.in_progress { background: color-mix(in srgb, var(--info) 22%, transparent); color: var(--info); }
+.prep.ready, .prep.done { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+.fiscal { border-radius: var(--radius-sm); padding: 8px 12px; margin: 8px 0; font-size: 14px; }
+.fiscal.signed-test { border: 1px dashed var(--warn); color: var(--warn); }
+.fiscal.pending { border: 1px solid var(--info); color: var(--info); }
+.fiscal.failed { border: 1px solid var(--danger); color: var(--danger); }
+.fiscal.none { border: 1px solid var(--line); color: var(--muted); }
+.kds-tools .seg-btn { white-space: nowrap; }
+.tt-line.sel .prep { background: rgba(0,0,0,.28); color: #fff; }

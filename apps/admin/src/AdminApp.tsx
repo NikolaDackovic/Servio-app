@@ -6,8 +6,10 @@ import { Report } from '@shared/pages/Report';
 import { Products } from '@shared/pages/Products';
 import { Orders } from '@shared/pages/Orders';
 import { Discounts } from './Discounts';
+import { Printing } from './Printing';
+import { Fiscal } from './Fiscal';
 
-type View = 'calendar' | 'report' | 'receipts' | 'products' | 'discounts';
+type View = 'calendar' | 'report' | 'receipts' | 'products' | 'discounts' | 'printing' | 'fiscal';
 
 /**
  * ADMIN / Backoffice — odvojena aplikacija (poseban port), samo za administraciju:
@@ -30,6 +32,8 @@ export function AdminApp() {
     { id: 'report', label: 'Izveštaj prometa', group: 'Poslovanje', show: can('report.read') },
     { id: 'products', label: 'Artikli i cene', group: 'Šifarnici', show: can('catalog.write') },
     { id: 'discounts', label: 'Popusti', group: 'Šifarnici', show: can('discount.manage') },
+    { id: 'printing', label: 'Štampa i KDS', group: 'Podešavanja', show: can('settings.manage') },
+    { id: 'fiscal', label: 'Fiskalizacija', group: 'Podešavanja', show: can('settings.manage') },
   ];
   const items = all.filter((i) => i.show);
 
@@ -77,6 +81,8 @@ export function AdminApp() {
           : current === 'receipts' ? <Orders key={receiptsDay ?? 'all'} readOnly businessDayId={receiptsDay} onClearDay={() => setReceiptsDay(null)} />
           : current === 'report' ? <Report />
           : current === 'discounts' ? <Discounts />
+          : current === 'printing' ? <Printing />
+          : current === 'fiscal' ? <Fiscal />
           : <Products />}
       </main>
     </div>
