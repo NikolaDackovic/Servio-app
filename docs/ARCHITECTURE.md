@@ -92,3 +92,20 @@ Svaka izmena porudžbine: transakcija → `SELECT ... FOR UPDATE` na redu porud�
 - **Smena kase** (`cash_shifts`, gotovina po uređaju) i **smena zaposlenog** (`staff_shifts`, pazar po konobaru) su namerno odvojene: na jednoj kasi radi više konobara, a konobar može naplaćivati i na telefonu.
 - Smena zaposlenog počinje prvom radnjom (otvaranje računa / naplata), ne prijavom. Plaćanje nosi `staff_shift_id`, pa je specifikacija pazara tačna i kada konobar preuzme tuđ sto.
 - Kraj smene je moguć tek kada na zaposlenom nema otvorenih računa — prebacuju se drugom (`POST /orders/transfer`, sve-ili-ništa, zaključavanje u stalnom redosledu).
+
+### ADR-008: Print Bridge preuzima zadatke odlaznim HTTP pozivima (polling), ne preko WebSocket-a
+- **Odluka**: bridge na 1,5 s poziva `POST /bridge/jobs/claim` (atomski zakup `FOR UPDATE SKIP LOCKED`, istek 60 s) i javlja rezultat. Prijava ključem uređaja (`X-Bridge-Key`, u bazi samo SHA-256).
+- **Zašto**: radi kroz bilo koji ruter/proxy bez otvaranja porta u lokalu; posle pada bridge-a ili servera ništa se ne gubi (stanje je u bazi); jednostavno za testiranje. Kašnjenje ≤ 1,5 s je prihvatljivo za kuhinjski blok.
+- **Cena**: stalni mali saobraćaj; moguće dvostruko štampanje ako se rezultat izgubi posle uspešne štampe (svesno: bolje nego izgubljen blok).
+
+### ADR-009: Događaji u realnom vremenu samo posle commit-a; WebSocket je obaveštenje, REST je izvor istine
+- **Odluka**: servisi skupljaju događaje u transakciji i objavljuju ih posle commit-a (`EventBus`); klijent posle ponovnog povezivanja ponovo učitava stanje. Jedan proces = jedan `EventBus` u memoriji.
+- **Cena**: više API procesa zahteva deljeni kanal (npr. PostgreSQL `LISTEN/NOTIFY` ili Redis) — nije urađeno.
+
+### ADR-010: Fiskalni red odvojen od naplate
+- **Odluka**: zahtev nastaje u transakciji naplate, šalje se posle commit-a (čeka se najviše 5 s), ponovni pokušaji u pozadini. Naplata nikad ne čeka niti pada zbog fiskalnog sistema; račun je „fiskalizovan“ samo uz potvrđen odgovor stvarnog provajdera.
+
+### ADR-011: Lager kao nepromenljiva kartica + stanje
+- **Odluka**: svako kretanje je red u `stock_movements` (nikad se ne menja ni briše; storno = suprotno kretanje), a `stock_balances` je keš stanja koji menja samo jedna funkcija, u istoj transakciji, uz zaključavanje u stalnom redosledu. PPNC se računa pri svakom ulazu.
+- **Zašto**: revizija i kartica artikla bez rekonstrukcije; konkurentni izlazi ne mogu da „prođu“ istovremeno preko stanja (test).
+- **Pravilo**: prodaja sme u minus (roba je izdata), ručna dokumenta i storno ne smeju.

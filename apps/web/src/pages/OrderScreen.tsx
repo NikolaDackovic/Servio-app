@@ -30,7 +30,7 @@ export function OrderScreen({ orderId: initialId, onBack }: { orderId: string; o
     onReconnect: () => { api<Order>('GET', `/orders/${orderId}`).then(order.setData).catch(() => undefined); },
   });
   const cats = useLoad(() => api<Category[]>('GET', '/categories'), [key]);
-  const prods = useLoad(() => api<{ data: Product[] }>('GET', '/products?pageSize=500').then((r) => r.data), [key]);
+  const prods = useLoad(() => api<{ data: Product[] }>('GET', '/products?pageSize=500&sellable=true').then((r) => r.data), [key]);
   const o = order.data;
   const tabs = useLoad(() => (o?.tableId
     ? api<any[]>('GET', `/orders?status=OPEN&tableId=${o.tableId}&pageSize=50`).then((l) => [...l].sort((a, b) => a.number - b.number))
@@ -120,7 +120,7 @@ export function OrderScreen({ orderId: initialId, onBack }: { orderId: string; o
       <section className="till-catalog">
         <div className="cat-grid">
           <button className={`cat-tile all ${cat === 'ALL' ? 'on' : ''}`} onClick={() => setCat('ALL')}>Svi artikli</button>
-          {cats.data?.filter((c) => c.active).map((c) => (
+          {cats.data?.filter((c) => c.active && prods.data?.some((p) => p.categoryId === c.id)).map((c) => (
             <button key={c.id} className={`cat-tile ${cat === c.id ? 'on' : ''}`} style={{ ['--tile' as any]: c.color ?? '#5b6475' }}
               onClick={() => setCat(c.id)}>{c.name}</button>
           ))}

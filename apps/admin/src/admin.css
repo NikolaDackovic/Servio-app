@@ -19,3 +19,15 @@
   .side-user { display: none; }
 }
 @media print { .admin-side { display: none; } .admin { display: block; } }
+
+/* Robno */
+.picker { position: relative; }
+.picker-list { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin: 4px 0 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,.18); max-height: 320px; overflow: auto; }
+.picker-list.empty { padding: 10px; }
+.picker-list button { width: 100%; text-align: left; background: none; border: 0; padding: 8px; border-radius: 6px; color: var(--text); cursor: pointer; font: inherit; }
+.picker-list button:hover { background: var(--panel-2); }
+.input.num { text-align: right; }
+.input.invalid { border-color: var(--danger); }
+tr.row-error td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+details.card > summary { cursor: pointer; padding: 4px 0; }
+.card.visible { overflow: visible; }

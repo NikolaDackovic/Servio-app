@@ -8,8 +8,14 @@ import { Orders } from '@shared/pages/Orders';
 import { Discounts } from './Discounts';
 import { Printing } from './Printing';
 import { Fiscal } from './Fiscal';
+import { Partners } from './Partners';
+import { Balances, StockCard } from './StockPages';
+import { Documents } from './Documents';
+import { Recipes } from './Recipes';
+import { ImportExport } from './ImportExport';
 
-type View = 'calendar' | 'report' | 'receipts' | 'products' | 'discounts' | 'printing' | 'fiscal';
+type View = 'calendar' | 'report' | 'receipts' | 'products' | 'discounts' | 'printing' | 'fiscal'
+  | 'balances' | 'card' | 'documents' | 'recipes' | 'partners' | 'import';
 
 /**
  * ADMIN / Backoffice — odvojena aplikacija (poseban port), samo za administraciju:
@@ -20,6 +26,7 @@ export function AdminApp() {
   const [view, setView] = useState<View>('calendar');
   const [dayDetail, setDayDetail] = useState<string | null>(null);
   const [receiptsDay, setReceiptsDay] = useState<string | null>(null);
+  const [cardFor, setCardFor] = useState<{ productId: string; warehouseId: string } | null>(null);
   const userId = me?.user.userId;
   useEffect(() => { setView('calendar'); setDayDetail(null); setReceiptsDay(null); }, [userId]);
 
@@ -32,6 +39,12 @@ export function AdminApp() {
     { id: 'report', label: 'Izveštaj prometa', group: 'Poslovanje', show: can('report.read') },
     { id: 'products', label: 'Artikli i cene', group: 'Šifarnici', show: can('catalog.write') },
     { id: 'discounts', label: 'Popusti', group: 'Šifarnici', show: can('discount.manage') },
+    { id: 'balances', label: 'Stanje lagera', group: 'Robno', show: can('stock.read') },
+    { id: 'documents', label: 'Robna dokumenta', group: 'Robno', show: can('stock.read') },
+    { id: 'card', label: 'Kartica artikla', group: 'Robno', show: can('stock.read') },
+    { id: 'recipes', label: 'Normativi', group: 'Robno', show: can('stock.read') },
+    { id: 'partners', label: 'Partneri', group: 'Robno', show: can('stock.read') },
+    { id: 'import', label: 'Uvoz i izvoz', group: 'Robno', show: can('stock.write') },
     { id: 'printing', label: 'Štampa i KDS', group: 'Podešavanja', show: can('settings.manage') },
     { id: 'fiscal', label: 'Fiskalizacija', group: 'Podešavanja', show: can('settings.manage') },
   ];
@@ -65,7 +78,7 @@ export function AdminApp() {
           ))}
           <div className="side-group">
             <div className="side-title">U pripremi</div>
-            <div className="side-soon">Ulaz robe, lager, normativi, zaposleni — sledeće iteracije</div>
+            <div className="side-soon">Zaposleni i uloge, više cenovnika — sledeće iteracije</div>
           </div>
         </nav>
         <div className="side-user">
@@ -82,6 +95,12 @@ export function AdminApp() {
           : current === 'report' ? <Report />
           : current === 'discounts' ? <Discounts />
           : current === 'printing' ? <Printing />
+          : current === 'balances' ? <Balances onCard={(productId, warehouseId) => { setCardFor({ productId, warehouseId }); setView('card'); }} />
+          : current === 'card' ? <StockCard key={cardFor ? cardFor.productId + cardFor.warehouseId : 'none'} initial={cardFor} />
+          : current === 'documents' ? <Documents />
+          : current === 'recipes' ? <Recipes />
+          : current === 'partners' ? <Partners />
+          : current === 'import' ? <ImportExport />
           : current === 'fiscal' ? <Fiscal />
           : <Products />}
       </main>

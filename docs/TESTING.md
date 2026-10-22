@@ -11,6 +11,45 @@ TEST_DATABASE_URL=postgresql://… npm test # druga test baza
 ```
 Integracioni testovi pre svakog fajla brišu šemu test baze, primenjuju **sve** SQL migracije i učitavaju demo seed, zatim pokreću pravi NestJS server i šalju HTTP zahteve. Nema mock-ova baze.
 
+`npm test` u korenu pokreće i testove Print Bridge-a (`apps/print-bridge/test`).
+
+## Rezultati — iteracija 4: faze 3 i 4 (22.10.2026, Node 22.22, PostgreSQL 16, Linux)
+
+**API: 107 / 107 prošlo** (58 ranijih + 26 u `print-kds-fiscal.e2e.spec.ts` + 23 u `stock.e2e.spec.ts`), dva uzastopna pokretanja.
+**Print Bridge: 12 / 12 prošlo** (`apps/print-bridge/test/bridge.spec.ts`).
+
+Faza 3 (`print-kds-fiscal.e2e.spec.ts`):
+- rutiranje ture po pozicijama (kartica + zadatak štampe po poziciji), artikal bez pozicije ostaje nerutiran · nova tura samo za nove stavke, ponovljeno slanje ne pravi ništa · 5 paralelnih slanja → jedna tura · baza odbija dupli `dedupe_key` i duplu karticu · storno pravi STORNO tiket jednom · pozicija bez štampača (samo KDS) · artikal sa sopstvenom pozicijom
+- Print Bridge API: bez ključa / pogrešan ključ 401, bridge ne može PIN prijavu · dva paralelna preuzimanja nikad isti zadatak · greška → odlaganje → ponovni pokušaj → trajna greška → ručno ponavljanje · istek zakupa vraća zadatak, drugi bridge ne može da javi tuđi rezultat · novi ključ poništava stari, heš se ne vraća
+- validacija štampača i prava
+- KDS: prava, filtriranje po poziciji, statusi, stavka spremna → kartica spremna, nedozvoljen prelaz 409, konobar vidi status pripreme, stornirana stavka na kartici
+- WebSocket: 401 bez/sa neispravnim tokenom i za deaktiviranog korisnika · filtriranje po poziciji · događaj tek posle commit-a, neuspela izmena ne šalje događaj · status sa KDS-a stiže kasi
+- Fiskalizacija: `/health` pokazuje TEST · TEST broj, zahtev sa kupcem i načinima plaćanja, ponovljena naplata ne pravi drugi zahtev · nedostupan fiskalni sistem: naplata uspeva, račun nije označen kao fiskalizovan, ponovni pokušaji pa uspeh · trajna greška → FAILED → ručni pokušaj · CHECK: SIGNED bez broja · NONE provajder · štampa računa sa „TEST — OVO NIJE FISKALNI RAČUN“, idempotentno, kopija
+- **Stvarni Print Bridge ↔ stvarni API**: kuhinjski blok stiže na lažni TCP štampač kao ESC/POS (CP852 bajtovi proveren), šank (simulacija) → SIMULATED, drugi krug ništa ne štampa
+
+Faza 4 (`stock.e2e.spec.ts`):
+- prava (konobar/kasir bez pristupa) · partner: PIB kontrolna cifra, jedinstven PIB · tačno jedno podrazumevano skladište (i u bazi)
+- prijemnica: validacija stavki, partner obavezan · PPNC (10×1000 + 5×1600)/15 = 1200 · ponovno knjiženje idempotentno · proknjižen dokument se ne menja · kartica sa stanjem posle svakog kretanja
+- otpis više od stanja → INSUFFICIENT_STOCK i **ništa** se ne knjiži · dva paralelna izlaza preko stanja → tačno jedan uspeva · prenos po PPNC
+- automatski utrošak: normativ iz skladišta pozicije, artikal sa zalihom troši sebe, minus pri prodaji vidljiv · idempotentno (ponovni poziv, ponovljena naplata, jedinstveni indeks) · stornirana stavka se ne troši · verzije normativa: aktivna se ne menja, aktivacija povlači prethodnu, prodaja beleži verziju
+- storno prijemnice vraća stanje i PPNC; storno koji bi doveo do minusa odbijen · popis: predlog, snimak knjižnog stanja, kretanja samo za razlike · kartica sa početnim stanjem
+- kasa ne nudi sirovine · uvoz CSV sa greškama po redovima (kategorija, PDV, cena, duplikat, da/ne), potvrda sa greškama odbijena u celosti, „preskoči neispravne“ sa izveštajem · nedostaju kolone · XLSX partneri (izmena po PIB-u) · stavke dokumenta iz CSV-a sa zarezom · izvoz CSV (BOM, `;`) i XLSX, izvezeni XLSX se ponovo uvozi bez grešaka
+
+Print Bridge (`bridge.spec.ts`): sadržaj kuhinjskog/storno bloka i računa (oznaka „nije fiskalni“ gore i dole) · kodiranje ascii/CP852/CP1250 · ESC/POS komande · TCP: tačni bajtovi, odbijena veza, timeout · simulacija nikad PRINTED · Windows RAW van Windows-a → trajna greška · petlja sa lažnim serverom · server nedostupan → petlja ne pada.
+
+Greške pronađene i ispravljene:
+- polja DTO klase postoje kao `undefined` (ES2022 class fields) pa je provera izmene štampača gazila postojeće vrednosti — bazni CHECK je uhvatio grešku, provera ispravljena
+- `@Type(() => Boolean)` je query `false` pretvarao u `true` (npr. `includeInactive=false`) — zamenjeno sa `@ToBool()` svuda
+- normativ: odgovor se čitao van transakcije (prazan odgovor) — čita se u transakciji
+- kartica: kretanja iz iste transakcije imaju isto vreme → dodata kolona `seq` za redosled
+- KDS: negativno „-1′“ zbog zastarelog sata ekrana — ispravljeno
+
+UI (headless Chrome):
+- faza 3 (dva pregledača: kasa i KDS uređaj): slanje → status „Kuhinja: primljeno“ · nova tura stiže na KDS u realnom vremenu · „Počni“/stavka spremna/„Spremno“ menja status na kasi u realnom vremenu · gašenje API-ja → crvena traka na KDS-u, ponovno pokretanje → „Povezano“ · naplata sa porukom o TEST fiskalizaciji · štampa računa · Print Bridge pokrenut kao poseban proces: zadaci u ADMIN-u „Simulirano“, sadržaj blokova proveren u `simulated-output` · ADMIN pozicije, štampači, bridge, red štampe, fiskalizacija
+- faza 4 (ADMIN): prijemnica (nacrt → stavke → knjiženje PRI-1) · prenos MP-1 · prodaja preko API-ja · stanje lagera sa minusom · kartica u šanku sa utroškom po normativu · normativ v2 aktiviran · popis POP-1 sa razlikama · uvoz CSV sa 2 greške → pregled → „uvezi ispravne“ · partneri · artikal kao sirovina sa lagerom. Bez grešaka u konzoli.
+
+Nije testirano: Windows (Print Bridge RAW adapter, servis), stvarni termalni štampači, Docker Compose.
+
 ## Rezultati — iteracija 3 (22.10.2026, Node 22.22, PostgreSQL 16, Linux)
 
 **58 / 58 prošlo** (44 ranijih + 14 novih u `test/e2e/checkout.e2e.spec.ts`), dva puzastopna pokretanja.

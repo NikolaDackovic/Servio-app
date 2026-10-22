@@ -1,8 +1,8 @@
 # POS platforma za ugostiteljstvo
 
-Modularni POS sistem: kasa, backoffice, (uskoro) KDS, štampa, lager i integracije. Backend NestJS + PostgreSQL (Drizzle), frontend React + Vite.
+Modularni POS sistem: kasa, backoffice, KDS, štampa (Print Bridge), lager i (uskoro) integracije. Backend NestJS + PostgreSQL (Drizzle), frontend React + Vite.
 
-**Status: iteracija 3 — kasa: ture na stolu, prebacivanje i spajanje, napomene, nova naplata (popusti, kupac/PIB, mix, reprezentacija), pregled računa uz PIN.** Naplata je isključivo u **TEST režimu**: nema platnog terminala ni fiskalizacije, i aplikacija to jasno prikazuje. Nije za produkcionu upotrebu u lokalu.
+**Status: iteracija 4 — faze 3 i 4: štampa i KDS, fiskalni red sa TEST adapterom, lager (dokumenta, PPNC, kartica, normativi, automatski utrošak, popis, uvoz/izvoz).** Naplata je isključivo u **TEST režimu**, a fiskalizacija postoji samo kao **testni adapter**: nijedan račun nije fiskalni i aplikacija to piše svuda (kasa, ADMIN, odštampan račun). Nije za produkcionu upotrebu u lokalu.
 
 ## Brzi start
 Preduslovi: Node.js 20.12+ i PostgreSQL 16 sa korisnikom `pos` i bazama `pos` i `pos_test` (vidi [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#windows--razvoj)).
@@ -16,11 +16,13 @@ npm run db:seed
 npm run dev:api      # API     :3000  (Swagger: http://localhost:3000/api/docs)
 npm run dev:web      # KASA    :5173  (drugi terminal)
 npm run dev:admin    # ADMIN   :5174  (treći terminal)
-npm test             # 58 testova
+npm run dev:bridge   # Print Bridge (četvrti terminal; ključ iz seed-a u apps/print-bridge/.env)
+npm test             # 107 testova API + 12 Print Bridge
 ```
 **Dve aplikacije, isti API i baza:**
 - **KASA** (http://localhost:5173) — samo kucanje i računi. Prvi put: `admin@demo.local` / `Demo123!` → izbor kase → zatim PIN 2222 (kasir), 1111 (konobar), 9999 (menadžer).
-- **ADMIN** (http://localhost:5174) — artikli i cene, kalendar dana, računi, izveštaji. Prijava: `admin@demo.local` ili `menadzer@demo.local`, lozinka `Demo123!`.
+- **ADMIN** (http://localhost:5174) — artikli i cene, kalendar dana, računi, izveštaji, lager, štampa i KDS, fiskalizacija. Prijava: `admin@demo.local` ili `menadzer@demo.local`, lozinka `Demo123!`.
+- **KDS** — ista aplikacija kao KASA na drugom uređaju: registracija uređaja „KDS – Kuhinja (KDS)“, PIN 3333.
 
 **Demo nalozi su samo za razvoj.**
 
@@ -35,7 +37,20 @@ npm test             # 58 testova
 - Naplata: popusti iz ADMIN-a, gotovina, kartica, mix, virman, reprezentacija; kupac na računu (PIB, JMBG, diplomatska… — docs/FISCAL.md)
 - Panel desno: Novi račun (F1), Pregled računa (F2), Moja smena, Cenovnik, Otvaranje/Zatvaranje smene, Osveži (F5), Ceo ekran; dole datum dana i cenovnik
 
-**Admin:** kalendar poslovnih dana, detalji dana (porez, kase, smene zaposlenih, popusti), računi dana, izveštaj prometa, artikli i cene, popusti.
+**Štampa i KDS (faza 3):**
+- Pripremne pozicije (šank, kuhinja…) i rutiranje kategorija/artikala; tura slanja pravi KDS kartice i zadatke štampe u istoj transakciji, bez duplikata
+- Print Bridge (`apps/print-bridge`): ESC/POS preko mreže, simulacija, Windows RAW (nije testiran na Windowsu); ponovni pokušaji, zakup, oporavak posle pada
+- KDS ekran: kartice po poziciji, boje po čekanju, zvuk, stavka/kartica spremna, završene, upozorenje na prekid veze i ponovno povezivanje; kasa vidi status pripreme u realnom vremenu (WebSocket)
+- Štampa računa/predračuna i kopije; fiskalni red sa TEST adapterom (status, ponovni pokušaji, ručno ponavljanje)
+
+**Lager (faza 4, ADMIN):**
+- Partneri (PIB sa kontrolnom cifrom), skladišta, sirovine (ne prodaju se na kasi)
+- Robna dokumenta: prijemnica, izlaz, povrat, prenos, otpis, interna potrošnja, popis — nacrt → proknjižen → storniran (suprotna kretanja)
+- Prosečna ponderisana nabavna cena, stanje sa vrednošću, kartica artikla sa stanjem posle svakog kretanja
+- Normativi sa verzijama; automatski utrošak pri naplati (idempotentno po stavci), iz skladišta pozicije
+- Uvoz CSV/XLSX (artikli, partneri, stavke dokumenta) sa pregledom, greškama po redovima i izveštajem; izvoz CSV/XLSX
+
+**Admin:** kalendar poslovnih dana, detalji dana (porez, kase, smene zaposlenih, popusti), računi dana, izveštaj prometa, artikli i cene, popusti, lager, štampa i KDS, fiskalizacija.
 
 **Osnova (iteracija 1):**
 - Prijava lozinkom i PIN-om na registrovanoj kasi; uloge i prava provereni na backendu
@@ -49,7 +64,7 @@ npm test             # 58 testova
 - Responsive interfejs (touch kasa, telefon), svetla/tamna tema po sistemu
 
 ## Šta još ne radi
-Ulaz robe, lager, normativi i dokumenti (sledeća iteracija), upravljanje zaposlenima, štampa i Print Bridge, KDS i WebSocket, fiskalizacija, više cenovnika (srećni sat), povraćaj novca, uvoz/izvoz, API ključevi i webhookovi, offline/hibridni rad. Plan: [docs/ROADMAP.md](docs/ROADMAP.md).
+Stvarna fiskalizacija (PFR/ESIR), upravljanje zaposlenima, više cenovnika (srećni sat), povraćaj novca, kalkulacija/nivelacija/PDF dokumenata, API ključevi i webhookovi, offline/hibridni rad. Print Bridge nije proveren na Windowsu ni sa stvarnim štampačem. Plan: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Dokumentacija
 [Arhitektura](docs/ARCHITECTURE.md) · [Plan](docs/ROADMAP.md) · [Baza](docs/DATABASE.md) · [API](docs/API.md) · [Štampa](docs/PRINTING.md) · [Instalacija](docs/DEPLOYMENT.md) · [Testiranje](docs/TESTING.md) · [Kupac i plaćanja](docs/FISCAL.md)

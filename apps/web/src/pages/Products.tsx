@@ -35,7 +35,7 @@ export function Products() {
               <tbody>
                 {list.data.data.map((p) => (
                   <tr key={p.id} onClick={() => write && setEdit(p)}>
-                    <td>{p.code}</td><td>{p.name}</td><td>{cats.data?.find((c) => c.id === p.categoryId)?.name}</td>
+                    <td>{p.code}</td><td>{p.name}{(p as any).isSellable === false && <small className="muted"> · sirovina</small>}{(p as any).trackStock && <small className="muted"> · lager</small>}</td><td>{cats.data?.find((c) => c.id === p.categoryId)?.name}</td>
                     <td>{p.taxLabel}</td><td className="num">{fmt(p.price)}</td>
                     <td>{p.active ? <span className="badge paid">Aktivan</span> : <span className="badge cancelled">Neaktivan</span>}</td>
                   </tr>
@@ -66,6 +66,7 @@ function ProductForm({ product, categories, taxes, onClose, onSaved }: {
     categoryId: product?.categoryId ?? categories[0]?.id, taxRateId: product?.taxRateId ?? taxes[0]?.id,
     barcode: product?.barcode ?? '', active: product?.active ?? true,
     prepStationId: (product as any)?.prepStationId ?? '',
+    trackStock: (product as any)?.trackStock ?? false, isSellable: (product as any)?.isSellable ?? true,
   });
   const stations = useLoad(() => api<{ id: string; name: string; active: boolean }[]>('GET', '/prep-stations').catch(() => []), []);
   const [error, setError] = useState<unknown>();
@@ -75,7 +76,8 @@ function ProductForm({ product, categories, taxes, onClose, onSaved }: {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(undefined);
-    const body: any = { name: f.name.trim(), price: f.price, categoryId: f.categoryId, taxRateId: f.taxRateId, prepStationId: f.prepStationId || null };
+    const body: any = { name: f.name.trim(), price: f.price, categoryId: f.categoryId, taxRateId: f.taxRateId, prepStationId: f.prepStationId || null,
+      trackStock: f.trackStock, isSellable: f.isSellable };
     if (f.barcode) body.barcode = f.barcode;
     try {
       if (product) await api('PATCH', `/products/${product.id}`, { ...body, active: f.active });
@@ -101,6 +103,8 @@ function ProductForm({ product, categories, taxes, onClose, onSaved }: {
           <option value="">Prema kategoriji</option>
           {stations.data?.filter((st) => st.active).map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}</select></label>
         <label>Barkod<input className="input" value={f.barcode} maxLength={32} onChange={(e) => setF({ ...f, barcode: e.target.value })} /></label>
+        <label className="check"><input type="checkbox" checked={f.trackStock} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} /> Vodi se zaliha (lager)</label>
+        <label className="check"><input type="checkbox" checked={f.isSellable} onChange={(e) => setF({ ...f, isSellable: e.target.checked })} /> Prodaje se na kasi <small className="muted">(isključiti za sirovine)</small></label>
         {product && <label className="check"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Aktivan</label>}
         {product && product.price !== f.price && priceOk && <div className="notice">Promena cene se beleži u istoriji cena. Već dodate stavke zadržavaju staru cenu.</div>}
         {error !== undefined && <ErrorBox error={error} />}

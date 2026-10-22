@@ -26,22 +26,23 @@ Legenda: ✅ urađeno i pokriveno testom · 🟡 delimično · ⬜ nije započet
 | Idempotentnost i zaštita od duple naplate | ✅ |
 | Blagajnička smena, uplate/isplate, očekivana gotovina, razlika | ✅ |
 | Izveštaj prometa (porez, načini plaćanja, proizvodi, konobari, sati, storna) | ✅ |
-| Popusti, podela po stavkama, prebacivanje stola/konobara, spajanje stolova | ⬜ |
+| Popusti, podela po stavkama, prebacivanje stola/konobara, spajanje stolova | ✅ (iteracija 3) |
 | Povraćaj novca / storno zatvorenog računa | ⬜ |
-| Ponovna štampa, interni obračun | ⬜ (zavisi od faze 3) |
+| Štampa računa i kopije (preko Print Bridge-a) | ✅ (faza 3); ⬜ interni obračun |
 
 ## Faza 3 — Štampa, KDS, fiskalizacija
-- ⬜ Rutiranje: kategorija/proizvod → pripremna pozicija (šank, kuhinja…)
-- ⬜ `print_jobs` red u bazi (nastaje iz ture slanja, idempotentno po `order_id + batch + station`)
-- ⬜ Print Bridge (Windows servis) — vidi PRINTING.md
-- ⬜ WebSocket kanal po lokalu/stanici; KDS ekran sa statusima, zvukom, prikazom prekida veze
-- ⬜ `FiscalizationProvider` + testni adapter sa jasno vidljivim TEST statusom
+- ✅ Rutiranje: kategorija/proizvod → pripremna pozicija (šank, kuhinja…)
+- ✅ `print_jobs` red u bazi (nastaje iz ture slanja u istoj transakciji, jedinstven `dedupe_key` po računu + turi + poziciji)
+- 🟡 Print Bridge (Node servis): ESC/POS preko mreže ✅ (lažni TCP štampač u testovima), simulacija ✅, Windows RAW napisan ali **nije testiran na Windowsu**; instalacija kao Windows servis nije proverena — vidi PRINTING.md
+- ✅ WebSocket kanal po lokalu/poziciji; KDS ekran sa statusima, zvukom, prikazom prekida veze i ponovnim povezivanjem
+- ✅ `FiscalizationProvider` + testni adapter sa jasno vidljivim TEST statusom; ⬜ stvarna PFR/ESIR integracija
 
 ## Faza 4 — Backoffice i lager
-- ⬜ Partneri; ulazni/izlazni dokumenti sa statusima nacrt → proknjižen → storniran
-- ⬜ Skladišta, kartica artikla, prosečna ponderisana nabavna cena
-- ⬜ Normativi sa verzijama, automatski utrošak (idempotentno po stavci)
-- ⬜ Popis, otpis, prenosi; uvoz/izvoz CSV/XLSX sa pregledom i izveštajem grešaka
+- ✅ Partneri; ulazni/izlazni dokumenti sa statusima nacrt → proknjižen → storniran
+- ✅ Skladišta, kartica artikla, prosečna ponderisana nabavna cena
+- ✅ Normativi sa verzijama, automatski utrošak (idempotentno po stavci)
+- ✅ Popis, otpis, prenosi, interna potrošnja, povrat; uvoz/izvoz CSV/XLSX sa pregledom i izveštajem grešaka
+- ⬜ Nivelacija/promena prodajnih cena kao dokument, kalkulacija (marža, RUC), knjiga KEPU, PDF dokumenata
 
 ## Faza 5 — API i integracije
 - 🟡 REST `/api/v1`, Swagger, standardne greške, paginacija (urađeno za postojeće resurse)
@@ -55,17 +56,12 @@ Legenda: ✅ urađeno i pokriveno testom · 🟡 delimično · ⬜ nije započet
 ## Faza 7 — Napredno
 - ⬜ Više lokala u UI, hibridna sinhronizacija (strategija u ARCHITECTURE.md), dostava, loyalty, kiosk, QR meni
 
-## Sledeći konkretan korak (iteracija 3 — ADMIN: robno)
-1. Dobavljači, skladišta, ulazni dokument (nacrt → proknjižen → storniran), kartica artikla, prosečna nabavna cena.
-2. Normativi sa verzijama i automatski utrošak pri prodaji (idempotentno po stavci).
-3. Zaposleni i uloge kroz ADMIN (PIN, lozinka, deaktivacija).
-4. Više cenovnika i vremenski cenovnici (srećni sat) — izbor na dugmetu Cenovnik.
-
-## Posle toga (štampa i KDS)
-1. Pripremne pozicije + rutiranje + `print_jobs` (tabela, migracija, servis, testovi).
-2. WebSocket gateway + KDS ekran (prijem ture, statusi stavki, prikaz prekida veze).
-3. Print Bridge v0: Node servis za Windows sa ESC/POS preko mreže (TCP 9100) i Windows spooler adapterom, testni (SIMULATED) adapter, red i retry.
-4. Testovi za scenarije B i E iz specifikacije.
+## Sledeći konkretan korak (iteracija 5)
+1. Zaposleni i uloge kroz ADMIN (PIN, lozinka, deaktivacija, dodela prava).
+2. Provera Print Bridge-a na Windowsu sa stvarnim mrežnim i USB termalnim štampačem; instalacioni paket (NSSM/servis).
+3. Faza 5: API ključevi za integracije, webhookovi (outbox, HMAC potpis, retry).
+4. Fiskalizacija: proučiti važeći Tehnički vodič PU i izabrati put (sertifikovani ESIR partner ili sopstvena sertifikacija) — tek tada LIVE provajder.
+5. Povraćaj novca / storno naplaćenog računa (uz fiskalnu refundaciju i povrat robe na lager).
 
 ## Najveći rizici
 | Rizik | Ublažavanje |

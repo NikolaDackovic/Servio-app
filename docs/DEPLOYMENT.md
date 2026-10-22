@@ -17,7 +17,11 @@ npm run dev:admin                 # ADMIN http://localhost:5174 (proxy /api → 
 
 Prvi ulazak na KASU: prijava `admin@demo.local` / `Demo123!` → izbor kase ("Kasa 1 – Šank") → PIN prijava. Demo PIN-ovi: 1111 konobar, 2222 kasir, 9999 menadžer. ADMIN: `admin@demo.local` ili `menadzer@demo.local` / `Demo123!`.
 
-Postojeća baza se ažurira sa `npm run db:migrate`: `0001` dodaje poslovni dan i smene zaposlenih (pravo `day.manage`), `0002` popuste, kupca na računu, ture, reprezentaciju i prava `order.discount` / `discount.manage`. Postojeća baza **nema demo popuste** (seed se ne ponavlja) — dodajte ih u ADMIN → Popusti.
+Postojeća baza se ažurira sa `npm run db:migrate`: `0001` dodaje poslovni dan i smene zaposlenih (pravo `day.manage`), `0002` popuste, kupca na računu, ture, reprezentaciju i prava `order.discount` / `discount.manage`, `0003` štampu, KDS i fiskalni red (prava `kds.use`, `settings.manage`), `0004` lager (prava `stock.read`, `stock.write`, `stock.post`; svaki lokal dobija skladište „Glavni magacin“). Postojeća baza **nema demo podatke novih iteracija** (seed se ne ponavlja): popuste, pripremne pozicije, štampače, KDS uređaj, sirovine i normative dodajte u ADMIN-u — ili za probu napravite novu bazu.
+
+**Print Bridge** (štampa): treći proces, vidi [PRINTING.md](PRINTING.md). Demo seed u konzoli ispisuje ključ demo bridge-a (`BRIDGE_KEY=pb_…`) — upišite ga u `apps/print-bridge/.env`, pa `npm run dev:bridge`. Bez bridge-a zadaci štampe čekaju u redu (ADMIN → Štampa i KDS → Red štampe).
+
+**KDS**: na drugom računaru/tabletu otvorite KASU, prijava administratorom → izbor uređaja „KDS – Kuhinja (KDS)“ → PIN 3333.
 
 ## Windows — razvoj
 1. Instalirati **PostgreSQL 16** (EDB installer sa postgresql.org). Zapamtiti lozinku korisnika `postgres`, port ostaviti 5432.
@@ -48,11 +52,11 @@ docker compose up -d --build
 docker compose exec api node dist/db/migrate.js
 # DEMO podaci samo za probu: docker compose exec api node dist/db/seed.js
 ```
-KASA je na portu 8080, ADMIN na 8081 (obe preko nginx-a, /api se prosleđuje API servisu). Baza **nije** izložena van Docker mreže.
+KASA je na portu 8080, ADMIN na 8081 (obe preko nginx-a, /api i WebSocket /api/v1/ws se prosleđuju API servisu). Baza **nije** izložena van Docker mreže. Print Bridge nije u Docker Compose-u — radi na Windows računaru u lokalu.
 > Napomena: `docker-compose.yml` i Dockerfile-ovi su napisani, ali **nisu pokrenuti** u ovoj iteraciji (u razvojnom okruženju nije bio dostupan Docker daemon). Proveriti pri prvoj instalaciji.
 
 ## Windows (lokal)
-Plan za instalaciju u objektu: PostgreSQL za Windows (EDB installer) + API kao Windows servis + statički build web-a koji servira API ili IIS/nginx. **Nije testirano na Windowsu** — instalacioni paket je deo faze 3 zajedno sa Print Bridge-om.
+Plan za instalaciju u objektu: PostgreSQL za Windows (EDB installer) + API kao Windows servis + statički build web-a (IIS/nginx) + Print Bridge kao Windows servis (NSSM, vidi PRINTING.md). **Nije testirano na Windowsu**; instalacioni paket nije napravljen.
 
 ## Backup i vraćanje
 ```bash
@@ -73,5 +77,7 @@ Preporuka: dnevni automatski backup (cron / Windows Task Scheduler) + kopija van
 | `PORT` | Podrazumevano 3000 |
 | `CORS_ORIGIN` | Dozvoljeni origin-i, zarezom odvojeni |
 | `PAYMENT_MODE` | Samo `TEST` je podržan; `LIVE` se namerno odbija pri startu |
+| `FISCAL_PROVIDER` | `TEST` (podrazumevano; računi jasno označeni kao NE-fiskalni) ili `NONE`. Stvarni provajder ne postoji |
+| `FISCAL_WORKER_INTERVAL_MS` | Interval ponovnih fiskalnih pokušaja (podrazumevano 5000) |
 
 Ako baza nije dostupna, API se ne pokreće i ispisuje jasnu poruku; `/api/v1/health` vraća 503 kada se veza izgubi.

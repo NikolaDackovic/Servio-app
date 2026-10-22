@@ -1,6 +1,19 @@
 # Kupac na računu, načini plaćanja i fiskalizacija
 
-> Stanje: podaci se **čuvaju na računu**, ali se još ne šalju fiskalnom uređaju (fiskalizacija nije povezana — TEST režim).
+> Stanje: postoji **fiskalni red i TESTNI adapter**. Stvarna integracija sa PFR/ESIR sistemom Poreske uprave **ne postoji** — nijedan račun iz ovog sistema nije fiskalni račun.
+
+## Fiskalni red (faza 3)
+- Kada račun pređe u PAID, u **istoj transakciji** nastaje zapis u `fiscal_receipts` (status PENDING) sa zahtevom: stavke posle popusta, oznake PDV-a, načini plaćanja, kupac.
+- Posle commit-a zahtev se šalje provajderu (čeka se najviše 5 s da odgovor naplate ne visi). Neuspeh: ponovni pokušaji sa rastućim razmakom (5 s … 10 min), najviše 8; trajna greška → FAILED i ručni „Ponovi“ u ADMIN → Fiskalizacija. **Naplata ne zavisi od fiskalnog sistema.**
+- Račun se prikazuje kao fiskalizovan **samo** kada je status SIGNED i provajder nije testni. CHECK u bazi: SIGNED mora imati broj i vreme.
+- Interfejs `FiscalizationProvider` (src/modules/fiscal/fiscal.ts): `sign(zahtev) → {ok, invoiceNumber, verificationUrl} | {ok:false, retryable, error}`.
+- `FISCAL_PROVIDER=TEST` (podrazumevano): `TestFiscalProvider` ništa ne šalje van sistema; broj je `TEST-YYYYMMDD-XXXXXXXX-N`, vrsta računa TRAINING, bez verifikacionog URL-a. Kasa, ADMIN, `/health` i odštampan račun jasno pišu „TEST — OVO NIJE FISKALNI RAČUN“.
+- `FISCAL_PROVIDER=NONE`: fiskalni zahtevi se ne prave; račun prikazuje „Nije fiskalizovano“.
+- Mapiranje načina plaćanja u zahtevu: Gotovina → Cash, Kartica → Card, Virman → WireTransfer, Reprezentacija → Other. **Nije provereno** prema Tehničkom vodiču — proveriti pre integracije (posebno reprezentaciju).
+
+### Šta nedostaje za stvarnu fiskalizaciju
+Sertifikat/bezbednosni element, ESIR/PFR API prema važećem Tehničkom vodiču, vrste računa (promet, avans, kopija, refundacija, obuka), QR/verifikacioni URL na računu, žurnal, rad bez veze (lokalni PFR), sertifikacija ESIR-a. Ništa od toga nije urađeno.
+
 
 ## Identifikacija kupca (`orders.buyer_id_type`, `orders.buyer_id`)
 Šifre vrste identifikacije prema šifarniku eFiskalizacije (izvor: javno uputstvo knjigovodstvenog softvera Minimax koje prenosi šifarnik PU):

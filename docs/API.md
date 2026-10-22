@@ -63,6 +63,60 @@ Osnovna putanja: `/api/v1`. Interaktivna dokumentacija (OpenAPI/Swagger): `http:
 | POST `/orders/transfer` `{ orderIds[], toUserId }` | order.write | Svoje račune; tuđe uz order.transfer; sve-ili-ništa |
 | GET `/orders/:id/history` | order.read | Istorija računa iz revizijskog traga |
 
+## Rute — faza 3 (štampa, KDS, fiskalizacija)
+| Metoda i putanja | Pravo | Opis |
+|---|---|---|
+| GET/POST `/printers`, PATCH `/printers/:id` | settings.manage | Štampači (SIMULATED / NETWORK_ESCPOS / WINDOWS_RAW) |
+| POST `/printers/:id/test` | settings.manage | Probna strana u red štampe |
+| GET `/prep-stations` | catalog.read | Pripremne pozicije |
+| POST `/prep-stations`, PATCH `/prep-stations/:id` | settings.manage | Pozicija: štampač, KDS |
+| `categories` / `products` polje `prepStationId` | catalog.write | Rutiranje (artikal ima prednost) |
+| GET `/devices`, PATCH `/devices/:id/receipt-printer` | settings.manage | Uređaji, štampač računa po kasi |
+| POST `/print-bridges`, POST `/print-bridges/:id/rotate-key` | settings.manage | Registracija bridge-a; ključ se vraća samo u odgovoru |
+| GET `/print-jobs?status&orderId`, POST `/print-jobs/:id/retry` | settings.manage | Red štampe, ponavljanje neuspelih |
+| POST `/orders/:id/print-receipt` `{ idempotencyKey }` | order.read | Račun/predračun na štampač kase; isti ključ = isti zadatak |
+| GET `/kds/stations`, GET `/kds/tickets?stationId&view=active\|done` | kds.use | KDS |
+| POST `/kds/tickets/:id/status` `{ status }` | kds.use | NEW / IN_PROGRESS / READY / DONE (409 `INVALID_TRANSITION`) |
+| POST `/kds/items/:id/ready` `{ ready }` | kds.use | Stavka spremna; sve spremne → kartica READY |
+| GET `/fiscal/status` | order.read | Provajder i režim (TEST / DISABLED) |
+| GET `/fiscal/receipts?status`, POST `/fiscal/receipts/:id/retry` | settings.manage | Fiskalni red |
+
+`GET /orders/:id` sada vraća i `fiscal` (status, broj, isTest, greška), `kdsTickets` i na stavkama `prepStationName` / `prepStatus`.
+
+### Print Bridge API (zaglavlje `X-Bridge-Key: pb_…`, bez JWT-a)
+| Metoda i putanja | Opis |
+|---|---|
+| POST `/bridge/hello` | Provera ključa, spisak štampača lokala, beleži poslednji kontakt |
+| POST `/bridge/jobs/claim` `{ limit? }` | Atomsko preuzimanje (PENDING kome je došlo vreme ili PRINTING sa isteklim zakupom od 60 s) |
+| POST `/bridge/jobs/:id/result` `{ status: PRINTED\|SIMULATED\|FAILED, error?, retryable? }` | Samo bridge koji drži zakup (inače 409 `JOB_NOT_CLAIMED`) |
+
+### WebSocket `ws(s)://host/api/v1/ws?token=<JWT>&stationId=<opciono>`
+Pristup: aktivni korisnik sa `order.read` ili `kds.use` (provera u bazi pri povezivanju; inače 401). Poruke `{ type, stationId, data, at }`: `kds.ticket.created`, `kds.ticket.updated`, `kds.item.voided`, `order.updated`, `order.prep.updated`, `print.job.created`, `print.job.updated`, `fiscal.updated`. Događaji se šalju **tek posle commit-a**; klijent na tekst „ping“ dobija „pong“. Posle ponovnog povezivanja klijent treba da ponovo učita stanje preko REST-a.
+
+## Rute — faza 4 (robno)
+| Metoda i putanja | Pravo | Opis |
+|---|---|---|
+| GET `/partners?search&includeInactive`, POST, PATCH `/partners/:id` | stock.read / stock.write | Partneri; PIB sa kontrolnom cifrom, jedinstven |
+| GET/POST `/warehouses`, PATCH `/warehouses/:id` | stock.read / stock.write | Skladišta; tačno jedno podrazumevano |
+| PUT `/prep-stations/:id/warehouse` `{ warehouseId }` | stock.write | Iz kog skladišta pozicija troši |
+| GET `/stock/documents?kind&status&warehouseId&partnerId&from&to&page` | stock.read | Lista dokumenata |
+| POST `/stock/documents` `{ kind, warehouseId, targetWarehouseId?, partnerId?, docDate?, externalNumber?, note? }` | stock.write | Nacrt |
+| GET `/stock/documents/:id`, PATCH `/stock/documents/:id` | stock.read / stock.write | Detalji (stavke, vrednosti, razlike popisa) / izmena zaglavlja nacrta |
+| PUT `/stock/documents/:id/lines` `{ lines[{productId, quantity, unitCost?, note?}], expectedVersion? }` | stock.write | Zamena stavki nacrta (422 `INVALID_LINES`, `DUPLICATE_LINE`) |
+| POST `/stock/documents/:id/fill-stocktake` | stock.write | Popis: dodaje sve artikle sa zalihom |
+| POST `/stock/documents/:id/post` `{ expectedVersion? }` | stock.post | Knjiženje (sve ili ništa); 422 `INSUFFICIENT_STOCK`, `PARTNER_REQUIRED`; ponovljeno → `alreadyPosted: true` |
+| POST `/stock/documents/:id/cancel` `{ reason }` | stock.post | Nacrt → odbačen; proknjižen → suprotna kretanja |
+| GET `/stock/balances?warehouseId&search&nonZero` | stock.read | Stanje, PPNC, vrednost, minus |
+| GET `/stock/card?productId&warehouseId&from&to` | stock.read | Kartica: početno, kretanja, promet, završno |
+| GET `/recipes?productId`, POST `/recipes`, PUT `/recipes/:id` | stock.read / stock.write | Normativi (izmena samo nacrta) |
+| POST `/recipes/:id/activate`, POST `/recipes/:id/retire` | stock.write | Aktivacija (prethodna → RETIRED) / povlačenje |
+| POST `/import/{products\|partners\|document-lines}/preview` `{ fileName, content(base64), documentId? }` | stock.write | Pregled: redovi, akcija (novo/izmena), greške |
+| POST `/import/.../commit` `{ …, skipInvalid? }` | stock.write (+ catalog.write za artikle) | Bez `skipInvalid` i sa greškama → 422 `IMPORT_HAS_ERRORS` i ništa se ne upisuje |
+| GET `/import/:entity/template?format=csv\|xlsx` | stock.write | Šablon |
+| GET `/export/{products\|partners\|stock-balances}?format=csv\|xlsx&warehouseId` | stock.read | Izvoz (CSV: `;`, decimalni zarez, UTF-8 BOM) |
+
+`GET /products` prima i `sellable=true|false` i `trackStock=true`; artikal ima `trackStock`, `isSellable`. Dodavanje sirovine na račun → 422 `PRODUCT_NOT_SELLABLE`.
+
 ## Primer: kafa za sto i kombinovana naplata
 ```bash
 TOKEN=$(curl -s -X POST localhost:3000/api/v1/auth/pin -H 'content-type: application/json' \
@@ -78,4 +132,4 @@ curl -s -X POST localhost:3000/api/v1/orders/$ORDER/payments -H "$H" -H 'content
 ```
 
 ## Planirano (nije implementirano)
-Integracioni API ključevi, webhookovi (`order.created`, `payment.completed`, …), štampa, KDS, lager i dokumenti — vidi ROADMAP.md.
+Integracioni API ključevi, webhookovi (`order.created`, `payment.completed`, …) — faza 5, vidi ROADMAP.md.
