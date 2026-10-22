@@ -11,7 +11,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  pgTable, uuid, text, varchar, boolean, integer, numeric, timestamp, jsonb, pgEnum,
+  pgTable, uuid, text, varchar, boolean, integer, numeric, timestamp, jsonb, pgEnum, date,
   uniqueIndex, index, primaryKey, check,
 } from 'drizzle-orm/pg-core';
 
@@ -27,6 +27,8 @@ export const paymentMethod = pgEnum('payment_method', ['CASH', 'CARD', 'TRANSFER
 export const paymentMode = pgEnum('payment_mode', ['TEST', 'LIVE']);
 export const shiftStatus = pgEnum('shift_status', ['OPEN', 'CLOSED']);
 export const cashMovementType = pgEnum('cash_movement_type', ['PAY_IN', 'PAY_OUT']);
+export const businessDayStatus = pgEnum('business_day_status', ['OPEN', 'CLOSED']);
+export const staffShiftStatus = pgEnum('staff_shift_status', ['OPEN', 'CLOSED']);
 
 // ---------- Organizacija i lokali ----------
 
@@ -156,12 +158,54 @@ export const diningTables = pgTable('dining_tables', {
   active: boolean('active').notNull().default(true),
 }, (t) => [uniqueIndex('tables_location_name_uq').on(t.locationId, t.name)]);
 
-// ---------- Smena (pre porudžbina zbog FK iz plaćanja) ----------
+// ---------- Poslovni dan ----------
+
+/**
+ * Poslovni (radni) dan lokala. Sav promet pripada danu koji je bio otvoren, i posle ponoći.
+ * Najviše jedan otvoren dan po lokalu; zaključak dana čuva snimak obračuna (summary).
+ */
+export const businessDays = pgTable('business_days', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  date: date('date', { mode: 'string' }).notNull(),
+  status: businessDayStatus('status').notNull().default('OPEN'),
+  openedById: uuid('opened_by_id').notNull().references(() => users.id),
+  closedById: uuid('closed_by_id').references(() => users.id),
+  openedAt: ts('opened_at').notNull().defaultNow(),
+  closedAt: ts('closed_at'),
+  summary: jsonb('summary'),
+}, (t) => [
+  uniqueIndex('business_days_location_date_uq').on(t.locationId, t.date),
+  uniqueIndex('business_days_one_open_uq').on(t.locationId).where(sql`${t.status} = 'OPEN'`),
+  check('business_days_closed_consistent', sql`${t.status} <> 'CLOSED' OR (${t.closedAt} IS NOT NULL AND ${t.closedById} IS NOT NULL)`),
+]);
+
+/**
+ * Smena zaposlenog (konobara) u okviru poslovnog dana. Na kraju: specifikacija pazara (summary),
+ * a otvoreni računi moraju prethodno biti prebačeni drugom konobaru.
+ */
+export const staffShifts = pgTable('staff_shifts', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  businessDayId: uuid('business_day_id').notNull().references(() => businessDays.id),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  status: staffShiftStatus('status').notNull().default('OPEN'),
+  startedAt: ts('started_at').notNull().defaultNow(),
+  endedAt: ts('ended_at'),
+  endedById: uuid('ended_by_id').references(() => users.id),
+  summary: jsonb('summary'),
+}, (t) => [
+  index('staff_shifts_day_idx').on(t.businessDayId),
+  uniqueIndex('staff_shifts_one_open_uq').on(t.locationId, t.userId).where(sql`${t.status} = 'OPEN'`),
+]);
+
+// ---------- Smena kase (pre porudžbina zbog FK iz plaćanja) ----------
 
 export const cashShifts = pgTable('cash_shifts', {
   id: id(),
   locationId: uuid('location_id').notNull().references(() => locations.id),
   deviceId: uuid('device_id').notNull().references(() => devices.id),
+  businessDayId: uuid('business_day_id').references(() => businessDays.id),
   status: shiftStatus('status').notNull().default('OPEN'),
   openedById: uuid('opened_by_id').notNull().references(() => users.id),
   closedById: uuid('closed_by_id').references(() => users.id),
@@ -195,6 +239,7 @@ export const orders = pgTable('orders', {
   locationId: uuid('location_id').notNull().references(() => locations.id),
   deviceId: uuid('device_id').references(() => devices.id),
   tableId: uuid('table_id').references(() => diningTables.id),
+  businessDayId: uuid('business_day_id').references(() => businessDays.id),
   number: integer('number').notNull(),
   status: orderStatus('status').notNull().default('OPEN'),
   guests: integer('guests'),
@@ -217,6 +262,7 @@ export const orders = pgTable('orders', {
   index('orders_location_status_idx').on(t.locationId, t.status),
   index('orders_table_status_idx').on(t.tableId, t.status),
   index('orders_closed_at_idx').on(t.closedAt),
+  index('orders_business_day_idx').on(t.businessDayId),
   check('orders_total_nonneg', sql`${t.total} >= 0`),
   check('orders_paid_not_over_total', sql`${t.paidTotal} >= 0 AND ${t.paidTotal} <= ${t.total}`),
   check('orders_paid_means_settled', sql`${t.status} <> 'PAID' OR (${t.paidTotal} = ${t.total} AND ${t.closedAt} IS NOT NULL)`),
@@ -252,6 +298,8 @@ export const payments = pgTable('payments', {
   id: id(),
   orderId: uuid('order_id').notNull().references(() => orders.id),
   shiftId: uuid('shift_id').notNull().references(() => cashShifts.id),
+  businessDayId: uuid('business_day_id').references(() => businessDays.id),
+  staffShiftId: uuid('staff_shift_id').references(() => staffShifts.id),
   deviceId: uuid('device_id').references(() => devices.id),
   method: paymentMethod('method').notNull(),
   mode: paymentMode('mode').notNull().default('TEST'),
@@ -265,6 +313,7 @@ export const payments = pgTable('payments', {
   uniqueIndex('payments_order_idem_uq').on(t.orderId, t.idempotencyKey),
   index('payments_shift_idx').on(t.shiftId),
   index('payments_created_idx').on(t.createdAt),
+  index('payments_business_day_idx').on(t.businessDayId),
   check('payments_amount_pos', sql`${t.amount} > 0`),
   check('payments_change_nonneg', sql`${t.change} >= 0`),
 ]);

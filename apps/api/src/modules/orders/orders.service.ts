@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, ne, sql, SQL } from 'drizzle-orm';
 import { DB, Db, Tx } from '../../db/db.module';
 import {
-  diningTables, documentCounters, orderItems, orders, payments, products, taxRates, users,
+  auditLogs, diningTables, documentCounters, orderItems, orders, payments, products, roles, taxRates, users,
 } from '../../db/schema';
 import { AuthUser } from '../../common/auth-context';
 import { P } from '../../common/permissions';
@@ -10,9 +10,10 @@ import { audit } from '../../common/audit';
 import { Conflict, Invalid, NotFound } from '../../common/errors';
 import { dec, lineTotal, money, qty, sum } from '../../common/money';
 import { findOpenShift, requireDevice } from '../shifts/shifts';
+import { ensureStaffShift, requireOpenDay } from '../day/day.helpers';
 import {
-  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, UpdateItemDto, VoidItemDto,
-  VersionDto,
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, TransferOrdersDto, UpdateItemDto,
+  VoidItemDto, VersionDto,
 } from './orders.dto';
 
 type OrderRow = typeof orders.$inferSelect;
@@ -115,6 +116,8 @@ export class OrdersService {
     const conds: SQL[] = [eq(orders.locationId, u.locationId)];
     if (q.status) conds.push(eq(orders.status, q.status));
     if (q.tableId) conds.push(eq(orders.tableId, q.tableId));
+    if (q.businessDayId) conds.push(eq(orders.businessDayId, q.businessDayId));
+    if (q.waiterId) conds.push(eq(orders.waiterId, q.waiterId));
     if (q.mine || !this.canAccessAll(u)) conds.push(eq(orders.waiterId, u.userId));
     const page = q.page ?? 1;
     const pageSize = q.pageSize ?? 50;
@@ -122,7 +125,8 @@ export class OrdersService {
       .select({
         id: orders.id, number: orders.number, status: orders.status, total: orders.total, paidTotal: orders.paidTotal,
         tableId: orders.tableId, tableName: diningTables.name, waiterId: orders.waiterId, waiterName: users.fullName,
-        openedAt: orders.openedAt, closedAt: orders.closedAt, version: orders.version,
+        openedAt: orders.openedAt, closedAt: orders.closedAt, version: orders.version, businessDayId: orders.businessDayId,
+        guests: orders.guests,
       })
       .from(orders).innerJoin(users, eq(users.id, orders.waiterId))
       .leftJoin(diningTables, eq(diningTables.id, orders.tableId))
@@ -143,9 +147,11 @@ export class OrdersService {
           .where(and(eq(diningTables.id, dto.tableId), eq(diningTables.locationId, u.locationId), eq(diningTables.active, true)));
         if (!t) throw Invalid('INVALID_TABLE', 'Sto ne postoji u ovom lokalu');
       }
+      const day = await requireOpenDay(tx, u);
+      await ensureStaffShift(tx, u, day.id);
       const number = await this.nextNumber(tx, u.locationId, 'ORDER');
       const [o] = await tx.insert(orders).values({
-        locationId: u.locationId, deviceId: u.deviceId, tableId: dto.tableId ?? null, number,
+        locationId: u.locationId, deviceId: u.deviceId, tableId: dto.tableId ?? null, number, businessDayId: day.id,
         guests: dto.guests ?? null, note: dto.note ?? null, openedById: u.userId, waiterId: u.userId,
         idempotencyKey: dto.idempotencyKey ?? null,
       }).returning();
@@ -297,8 +303,10 @@ export class OrdersService {
         throw Conflict('STALE_ORDER', 'Porudžbinu je u međuvremenu izmenio neko drugi. Osvežite prikaz.');
       }
 
+      const day = await requireOpenDay(tx, u);
       const shift = await findOpenShift(tx, u);
       if (!shift) throw Conflict('NO_OPEN_SHIFT', 'Naplata nije moguća: na ovoj kasi nije otvorena smena');
+      const staffShift = await ensureStaffShift(tx, u, day.id);
 
       const total = dec(o.total);
       const paid = dec(o.paidTotal);
@@ -324,7 +332,8 @@ export class OrdersService {
       }
 
       const [payment] = await tx.insert(payments).values({
-        orderId: o.id, shiftId: shift.id, deviceId: u.deviceId, method: dto.method, mode: 'TEST',
+        orderId: o.id, shiftId: shift.id, businessDayId: day.id, staffShiftId: staffShift.id,
+        deviceId: u.deviceId, method: dto.method, mode: 'TEST',
         amount: money(amount), tendered, change: money(change), idempotencyKey: dto.idempotencyKey, createdById: u.userId,
       }).returning();
 
@@ -335,6 +344,7 @@ export class OrdersService {
         status: settled ? 'PAID' : 'OPEN',
         closedAt: settled ? new Date() : null,
         closedById: settled ? u.userId : null,
+        businessDayId: o.businessDayId ?? day.id,
         version: o.version + 1,
         updatedAt: new Date(),
       }).where(eq(orders.id, o.id));
@@ -346,5 +356,48 @@ export class OrdersService {
 
       return { payment, idempotentReplay: false, order: await this.get(u, o.id, tx) };
     });
+  }
+
+  /**
+   * Prebacivanje otvorenih računa na drugog zaposlenog (npr. kraj smene konobara).
+   * Svoje račune može da prebaci svako sa order.write; tuđe samo sa order.transfer.
+   * Sve-ili-ništa: ako i jedan račun ne može da se prebaci, ništa se ne menja.
+   */
+  async transfer(u: AuthUser, dto: TransferOrdersDto) {
+    return this.db.transaction(async (tx) => {
+      const [target] = await tx.select({ id: users.id, fullName: users.fullName, active: users.active, permissions: roles.permissions })
+        .from(users).innerJoin(roles, eq(roles.id, users.roleId))
+        .where(and(eq(users.id, dto.toUserId), eq(users.organizationId, u.organizationId)));
+      if (!target || !target.active) throw Invalid('INVALID_TARGET_USER', 'Izabrani zaposleni ne postoji ili nije aktivan');
+      if (!target.permissions.includes(P.ORDER_WRITE)) throw Invalid('TARGET_CANNOT_TAKE_ORDERS', 'Izabrani zaposleni ne može da preuzme račune');
+
+      const ids = [...new Set(dto.orderIds)].sort(); // stalni redosled zaključavanja → bez deadlock-a
+      const moved: { id: string; number: number; fromUserId: string }[] = [];
+      for (const id of ids) {
+        const [o] = await tx.select().from(orders)
+          .where(and(eq(orders.id, id), eq(orders.locationId, u.locationId))).for('update');
+        if (!o) throw NotFound('Porudžbina');
+        if (o.status !== 'OPEN') throw Conflict('ORDER_NOT_OPEN', `Račun #${o.number} nije otvoren`);
+        if (o.waiterId !== u.userId && !u.permissions.includes(P.ORDER_TRANSFER)) {
+          throw Conflict('ORDER_NOT_YOURS', `Račun #${o.number} pripada drugom konobaru — prebacivanje tuđih računa zahteva pravo order.transfer`);
+        }
+        if (o.waiterId === target.id) continue;
+        await tx.update(orders).set({ waiterId: target.id, version: o.version + 1, updatedAt: new Date() }).where(eq(orders.id, o.id));
+        await audit(tx, u, 'order.transfer', 'order', o.id, { number: o.number, fromUserId: o.waiterId, toUserId: target.id, toName: target.fullName });
+        moved.push({ id: o.id, number: o.number, fromUserId: o.waiterId });
+      }
+      return { toUserId: target.id, toName: target.fullName, moved };
+    });
+  }
+
+  /** Istorija računa iz revizijskog traga: ko je, kada i šta uradio. */
+  async history(u: AuthUser, id: string) {
+    await this.get(u, id); // ista pravila pristupa kao za detalje
+    return this.db
+      .select({ id: auditLogs.id, action: auditLogs.action, data: auditLogs.data, createdAt: auditLogs.createdAt,
+        userId: auditLogs.userId, userName: users.fullName })
+      .from(auditLogs).leftJoin(users, eq(users.id, auditLogs.userId))
+      .where(and(eq(auditLogs.organizationId, u.organizationId), eq(auditLogs.entity, 'order'), eq(auditLogs.entityId, id)))
+      .orderBy(asc(auditLogs.createdAt));
   }
 }

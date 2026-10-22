@@ -11,10 +11,13 @@ cp apps/api/.env.example apps/api/.env   # pa promeniti tajne
 npm run db:migrate                # primena SQL migracija
 npm run db:seed                   # DEMO podaci (samo za razvoj)
 npm run dev:api                   # http://localhost:3000/api/v1, Swagger: /api/docs
-npm run dev:web                   # http://localhost:5173 (proxy /api → 3000)
+npm run dev:web                   # KASA  http://localhost:5173 (proxy /api → 3000)
+npm run dev:admin                 # ADMIN http://localhost:5174 (proxy /api → 3000)
 ```
 
-Prvi ulazak: prijava `admin@demo.local` / `Demo123!` → izbor kase ("Kasa 1 – Šank") → PIN prijava. Demo PIN-ovi: 1111 konobar, 2222 kasir, 9999 menadžer.
+Prvi ulazak na KASU: prijava `admin@demo.local` / `Demo123!` → izbor kase ("Kasa 1 – Šank") → PIN prijava. Demo PIN-ovi: 1111 konobar, 2222 kasir, 9999 menadžer. ADMIN: `admin@demo.local` ili `menadzer@demo.local` / `Demo123!`.
+
+Postojeća baza se ažurira sa `npm run db:migrate` — migracija `0001` dodaje poslovni dan i smene zaposlenih i daje pravo `day.manage` postojećim ulogama (admin, vlasnik, menadžer, kasir).
 
 ## Windows — razvoj
 1. Instalirati **PostgreSQL 16** (EDB installer sa postgresql.org). Zapamtiti lozinku korisnika `postgres`, port ostaviti 5432.
@@ -32,7 +35,7 @@ Prvi ulazak: prijava `admin@demo.local` / `Demo123!` → izbor kase ("Kasa 1 –
    npm run db:seed
    npm run dev:api
    ```
-   U drugom terminalu: `npm run dev:web`, pa otvoriti http://localhost:5173.
+   U drugom terminalu `npm run dev:web` (KASA, http://localhost:5173), u trećem `npm run dev:admin` (ADMIN, http://localhost:5174).
 
 `apps/api/.env` se učitava automatski (API, migracije i seed), bez obzira iz kog foldera se komanda pokreće. Ako migracija prijavi `Uzrok: connect ECONNREFUSED 127.0.0.1:5432`, PostgreSQL servis nije pokrenut (Services → postgresql-x64-16 → Start). Ako prijavi grešku lozinke, `DATABASE_URL` u `.env` ne odgovara korisniku iz koraka 2.
 
@@ -45,7 +48,7 @@ docker compose up -d --build
 docker compose exec api node dist/db/migrate.js
 # DEMO podaci samo za probu: docker compose exec api node dist/db/seed.js
 ```
-Aplikacija je na portu 8080 (web + /api preko nginx-a). Baza **nije** izložena van Docker mreže.
+KASA je na portu 8080, ADMIN na 8081 (obe preko nginx-a, /api se prosleđuje API servisu). Baza **nije** izložena van Docker mreže.
 > Napomena: `docker-compose.yml` i Dockerfile-ovi su napisani, ali **nisu pokrenuti** u ovoj iteraciji (u razvojnom okruženju nije bio dostupan Docker daemon). Proveriti pri prvoj instalaciji.
 
 ## Windows (lokal)

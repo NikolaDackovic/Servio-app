@@ -11,6 +11,7 @@ import { P } from '../../common/permissions';
 import { audit } from '../../common/audit';
 import { Conflict, Invalid, NotFound } from '../../common/errors';
 import { dec, money } from '../../common/money';
+import { requireOpenDay } from '../day/day.helpers';
 
 const AMOUNT_RE = /^\d{1,10}(\.\d{1,2})?$/;
 
@@ -41,32 +42,37 @@ export async function findOpenShift(tx: DbOrTx, u: AuthUser, lock = false) {
   return s;
 }
 
+/**
+ * Očekivana gotovina = početna + gotovinske naplate (primenjeni iznos, kusur je već oduzet)
+ *                      + uplate u blagajnu − isplate iz blagajne.
+ */
+export async function cashShiftSummary(tx: DbOrTx, shiftId: string) {
+  const [shift] = await tx.select().from(cashShifts).where(eq(cashShifts.id, shiftId));
+  const byMethod = await tx
+    .select({ method: payments.method, total: sql<string>`coalesce(sum(${payments.amount}),0)::numeric(14,2)::text`, count: sql<number>`count(*)::int` })
+    .from(payments).where(eq(payments.shiftId, shiftId)).groupBy(payments.method);
+  const mv = await tx
+    .select({ type: cashMovements.type, total: sql<string>`coalesce(sum(${cashMovements.amount}),0)::numeric(14,2)::text` })
+    .from(cashMovements).where(eq(cashMovements.shiftId, shiftId)).groupBy(cashMovements.type);
+  const cash = dec(byMethod.find((m) => m.method === 'CASH')?.total);
+  const payIn = dec(mv.find((m) => m.type === 'PAY_IN')?.total);
+  const payOut = dec(mv.find((m) => m.type === 'PAY_OUT')?.total);
+  const expectedCash = dec(shift.openingCash).add(cash).add(payIn).sub(payOut);
+  return {
+    shift,
+    payments: byMethod,
+    payIn: money(payIn), payOut: money(payOut),
+    expectedCash: money(expectedCash),
+  };
+}
+
+
 @Injectable()
 export class ShiftsService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
-  /**
-   * Očekivana gotovina = početna + gotovinske naplate (primenjeni iznos, kusur je već oduzet)
-   *                      + uplate u blagajnu − isplate iz blagajne.
-   */
-  async summary(tx: DbOrTx, shiftId: string) {
-    const [shift] = await tx.select().from(cashShifts).where(eq(cashShifts.id, shiftId));
-    const byMethod = await tx
-      .select({ method: payments.method, total: sql<string>`coalesce(sum(${payments.amount}),0)::numeric(14,2)::text`, count: sql<number>`count(*)::int` })
-      .from(payments).where(eq(payments.shiftId, shiftId)).groupBy(payments.method);
-    const mv = await tx
-      .select({ type: cashMovements.type, total: sql<string>`coalesce(sum(${cashMovements.amount}),0)::numeric(14,2)::text` })
-      .from(cashMovements).where(eq(cashMovements.shiftId, shiftId)).groupBy(cashMovements.type);
-    const cash = dec(byMethod.find((m) => m.method === 'CASH')?.total);
-    const payIn = dec(mv.find((m) => m.type === 'PAY_IN')?.total);
-    const payOut = dec(mv.find((m) => m.type === 'PAY_OUT')?.total);
-    const expectedCash = dec(shift.openingCash).add(cash).add(payIn).sub(payOut);
-    return {
-      shift,
-      payments: byMethod,
-      payIn: money(payIn), payOut: money(payOut),
-      expectedCash: money(expectedCash),
-    };
+  summary(tx: DbOrTx, shiftId: string) {
+    return cashShiftSummary(tx, shiftId);
   }
 
   async current(u: AuthUser) {
@@ -78,10 +84,11 @@ export class ShiftsService {
   async open(u: AuthUser, dto: OpenShiftDto) {
     const deviceId = requireDevice(u);
     return this.db.transaction(async (tx) => {
+      const day = await requireOpenDay(tx, u);
       const existing = await findOpenShift(tx, u);
       if (existing) throw Conflict('SHIFT_ALREADY_OPEN', 'Na ovoj kasi je već otvorena smena', { shiftId: existing.id });
       const [s] = await tx.insert(cashShifts).values({
-        locationId: u.locationId, deviceId, openedById: u.userId, openingCash: money(dto.openingCash),
+        locationId: u.locationId, deviceId, businessDayId: day.id, openedById: u.userId, openingCash: money(dto.openingCash),
       }).returning();
       await audit(tx, u, 'shift.open', 'shift', s.id, { openingCash: s.openingCash });
       return s;

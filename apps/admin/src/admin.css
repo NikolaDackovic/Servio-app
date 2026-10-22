@@ -1,0 +1,21 @@
+/* ADMIN: levi navigacioni meni, sadržaj desno. Deli tokene boja sa kasom (styles.css). */
+.admin { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 100%; }
+.admin-side { background: var(--bg-2); border-right: 1px solid var(--line); display: grid; grid-template-rows: auto 1fr auto; padding: 16px 12px; gap: 16px; min-height: 0; }
+.admin-side nav { overflow: auto; display: grid; align-content: start; gap: 18px; }
+.admin-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--text); color: var(--bg); letter-spacing: .08em; }
+.side-group { display: grid; gap: 2px; }
+.side-title { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); padding: 0 10px 6px; }
+.side-item { text-align: left; min-height: 40px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.side-item:hover { background: var(--panel-2); }
+.side-item.on { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }
+.side-soon { font-size: 13px; color: var(--muted); padding: 0 10px; line-height: 1.4; }
+.side-user { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; border-top: 1px solid var(--line); padding-top: 12px; }
+.admin-main { overflow: auto; min-width: 0; }
+@media (max-width: 820px) {
+  .admin { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .admin-side { grid-template-rows: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .admin-side nav { display: flex; overflow-x: auto; gap: 4px; }
+  .side-group { display: flex; } .side-title, .side-soon { display: none; }
+  .side-user { display: none; }
+}
+@media print { .admin-side { display: none; } .admin { display: block; } }

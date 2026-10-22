@@ -29,7 +29,7 @@ Osnovna putanja: `/api/v1`. Interaktivna dokumentacija (OpenAPI/Swagger): `http:
 | POST `/products`, PATCH `/products/:id` | catalog.write | Promena cene se beleži u istoriji |
 | GET `/products/:id/price-history` | catalog.read | |
 | GET `/tables`, POST `/tables` | table.read / table.write | Stanje stola izvedeno iz otvorenih računa |
-| GET `/orders?status&tableId&mine&page&pageSize` | order.read | Konobar vidi samo svoje bez `order.read_all` |
+| GET `/orders?status&tableId&businessDayId&waiterId&mine&page&pageSize` | order.read | Konobar vidi samo svoje bez `order.read_all` |
 | POST `/orders` | order.write | `{ tableId?, guests?, note?, idempotencyKey? }` |
 | GET `/orders/:id` | order.read | Stavke, plaćanja, preostalo, PDV rekapitulacija |
 | POST `/orders/:id/items` | order.write | `{ productId, quantity?, note?, expectedVersion? }` |
@@ -42,7 +42,17 @@ Osnovna putanja: `/api/v1`. Interaktivna dokumentacija (OpenAPI/Swagger): `http:
 | GET `/shifts/current` | order.read | Otvorena smena kase + obračun |
 | POST `/shifts/open`, `/shifts/close`, `/shifts/current/cash-movements` | shift.manage | |
 | GET `/shifts`, `/shifts/:id/report` | shift.manage | |
-| GET `/reports/sales?from&to&waiterId&deviceId` | report.read | Datumi u zoni lokala, uključivo |
+| GET `/reports/sales?from&to` ili `?businessDayId` (+ `waiterId`, `deviceId`) | report.read | Po datumu (zona lokala) ili po poslovnom danu |
+| GET `/business-days/current` | order.read | Otvoren dan + obračun |
+| POST `/business-days/open` `{ date? }` | day.manage | Datum mora biti posle poslednjeg dana |
+| POST `/business-days/current/close` | day.manage | 409 `DAY_HAS_OPEN_ORDERS` / `DAY_HAS_OPEN_CASH_SHIFTS` sa spiskom |
+| GET `/business-days?month=YYYY-MM` | report.read | Kalendar |
+| GET `/business-days/:id` | report.read | Obračun, kase, smene zaposlenih |
+| GET `/staff-shifts/current`, POST `/staff-shifts/current/end` | order.read | Specifikacija pazara; kraj smene (409 `STAFF_HAS_OPEN_ORDERS`) |
+| GET `/staff-shifts?businessDayId`, GET `/staff-shifts/:id` | order.read | Tuđe smene uz order.read_all |
+| GET `/staff/waiters` | order.read | Zaposleni koji mogu da preuzmu račune |
+| POST `/orders/transfer` `{ orderIds[], toUserId }` | order.write | Svoje račune; tuđe uz order.transfer; sve-ili-ništa |
+| GET `/orders/:id/history` | order.read | Istorija računa iz revizijskog traga |
 
 ## Primer: kafa za sto i kombinovana naplata
 ```bash

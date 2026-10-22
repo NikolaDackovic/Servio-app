@@ -15,7 +15,7 @@ export function Shift() {
   const [busy, setBusy] = useState(false);
   const [closed, setClosed] = useState<any>(null);
 
-  if (!me?.user.deviceId) return <div className="page"><div className="notice">Smena se vodi po kasi. Prijavite se na registrovanoj kasi (PIN prijava).</div></div>;
+  if (!me?.user.deviceId) return <div className="page"><div className="notice">Kasa (gotovina) se vodi po uređaju. Prijavite se na registrovanoj kasi (PIN prijava).</div></div>;
   if (cur.loading && !cur.data) return <Spinner />;
   if (cur.error) return <ErrorBox error={cur.error} onRetry={cur.reload} />;
   const s = cur.data;
@@ -33,13 +33,13 @@ export function Shift() {
     } catch (e: any) { toast('err', e.message); } finally { setBusy(false); }
   };
 
-  const titles = { open: 'Otvaranje smene — početna gotovina', close: 'Zatvaranje smene — prebrojana gotovina', PAY_IN: 'Uplata u blagajnu', PAY_OUT: 'Isplata iz blagajne' };
+  const titles = { open: 'Otvaranje kase — početna gotovina', close: 'Zatvaranje kase — prebrojana gotovina', PAY_IN: 'Uplata u blagajnu', PAY_OUT: 'Isplata iz blagajne' };
 
   return (
     <div className="page narrow">
       {closed && (
         <div className="card">
-          <h3>Smena zatvorena</h3>
+          <h3>Kasa zatvorena (gotovina prebrojana)</h3>
           <ShiftNumbers data={closed} />
           <div className={`row big ${cmpMoney(closed.shift.difference, '0.00') === 0 ? '' : 'warn-text'}`}>
             <span>Razlika (prebrojano − očekivano)</span><strong>{fmt(closed.shift.difference)}</strong>
@@ -49,19 +49,19 @@ export function Shift() {
       )}
       {!s.shift ? (
         <div className="card">
-          <h3>Nema otvorene smene na ovoj kasi</h3>
-          <p className="muted">Naplata nije moguća dok se smena ne otvori.</p>
-          {manage ? <button className="btn primary lg" onClick={() => setDialog('open')}>Otvori smenu</button> : <p className="notice">Smenu otvara kasir ili menadžer.</p>}
+          <h3>Kasa (gotovina) nije otvorena</h3>
+          <p className="muted">Naplata na ovoj kasi nije moguća dok se kasa ne otvori sa početnim stanjem gotovine.</p>
+          {manage ? <button className="btn primary lg" onClick={() => setDialog('open')}>Otvori kasu</button> : <p className="notice">Kasu otvara kasir ili menadžer.</p>}
         </div>
       ) : (
         <div className="card">
-          <h3>Smena otvorena od {time(s.shift.openedAt)}</h3>
+          <h3>Kasa otvorena od {time(s.shift.openedAt)}</h3>
           <ShiftNumbers data={s} />
           {manage && (
             <div className="btn-row">
               <button className="btn" onClick={() => setDialog('PAY_IN')}>Uplata</button>
               <button className="btn" onClick={() => setDialog('PAY_OUT')}>Isplata</button>
-              <button className="btn primary" onClick={() => setDialog('close')}>Zatvori smenu</button>
+              <button className="btn primary" onClick={() => setDialog('close')}>Zatvori kasu (prebrojavanje)</button>
             </div>
           )}
         </div>

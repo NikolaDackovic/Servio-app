@@ -11,6 +11,7 @@ export const P = {
   ORDER_TRANSFER: 'order.transfer', // promena konobara/stola
   PAYMENT_CREATE: 'payment.create',
   SHIFT_MANAGE: 'shift.manage',
+  DAY_MANAGE: 'day.manage', // otvaranje i zaključak poslovnog dana
   REPORT_READ: 'report.read',
   USER_MANAGE: 'user.manage',
   AUDIT_READ: 'audit.read',
@@ -26,11 +27,11 @@ export const DEFAULT_ROLES: { code: string; name: string; permissions: Permissio
   {
     code: 'MANAGER', name: 'Menadžer',
     permissions: [P.CATALOG_READ, P.CATALOG_WRITE, P.TABLE_READ, P.TABLE_WRITE, P.ORDER_READ, P.ORDER_READ_ALL,
-      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.SHIFT_MANAGE, P.REPORT_READ, P.AUDIT_READ],
+      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ],
   },
   {
     code: 'CASHIER', name: 'Kasir',
-    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.ORDER_WRITE, P.PAYMENT_CREATE, P.SHIFT_MANAGE],
+    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.ORDER_WRITE, P.PAYMENT_CREATE, P.SHIFT_MANAGE, P.DAY_MANAGE],
   },
   {
     code: 'WAITER', name: 'Konobar',

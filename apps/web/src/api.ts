@@ -112,4 +112,4 @@ export interface Order {
   tableId: string | null; tableName: string | null; waiterName: string; version: number; openedAt: string; closedAt: string | null;
   items: OrderItem[]; payments: Payment[]; taxSummary: { label: string; rate: string; gross: string; tax: string; net: string }[];
 }
-export interface Table { id: string; name: string; area: string; seats: number; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string }[] }
+export interface Table { id: string; name: string; area: string; seats: number; posX: number; posY: number; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string }[] }

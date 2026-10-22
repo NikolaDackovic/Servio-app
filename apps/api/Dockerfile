@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
 RUN npm ci -w apps/api --include-workspace-root
 COPY apps/api apps/api
 RUN npm run build -w apps/api && npm prune --omit=dev -w apps/api

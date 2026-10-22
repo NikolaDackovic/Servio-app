@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import {
-  IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Matches, Max, Min,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Matches, Max, Min,
 } from 'class-validator';
 
 const AMOUNT_RE = /^\d{1,10}(\.\d{1,2})?$/;
@@ -52,7 +52,14 @@ export class CreatePaymentDto {
 export class ListOrdersQuery {
   @IsOptional() @IsIn(['OPEN', 'PAID', 'CANCELLED']) status?: 'OPEN' | 'PAID' | 'CANCELLED';
   @IsOptional() @IsUUID() tableId?: string;
+  @IsOptional() @IsUUID() businessDayId?: string;
+  @IsOptional() @IsUUID() waiterId?: string;
   @IsOptional() @Type(() => Boolean) @IsBoolean() mine?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) pageSize?: number;
+}
+
+export class TransferOrdersDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(200) @IsUUID('all', { each: true }) orderIds: string[];
+  @IsUUID() toUserId: string;
 }

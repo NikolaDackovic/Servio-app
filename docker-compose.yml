@@ -20,12 +20,17 @@ services:
       DATABASE_URL: postgresql://pos:${POSTGRES_PASSWORD}@db:5432/pos
       JWT_SECRET: ${JWT_SECRET:?postavite JWT_SECRET u .env}
       PIN_PEPPER: ${PIN_PEPPER:?postavite PIN_PEPPER u .env}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080,http://localhost:8081}
       PAYMENT_MODE: TEST
-  web:
+  web:   # KASA
     build: { context: ., dockerfile: apps/web/Dockerfile }
     restart: unless-stopped
     depends_on: [api]
     ports: ["${WEB_PORT:-8080}:80"]
+  admin: # ADMIN / backoffice
+    build: { context: ., dockerfile: apps/admin/Dockerfile }
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["${ADMIN_PORT:-8081}:80"]
 volumes:
   pgdata:

@@ -16,6 +16,7 @@ import { ShiftsModule } from './modules/shifts/shifts';
 import { OrdersModule } from './modules/orders/orders.module';
 import { ReportsModule } from './modules/reports/reports';
 import { HealthModule } from './modules/health/health';
+import { DayModule } from './modules/day/day';
 
 export function buildAppModule(cfg: AppConfig): DynamicModule {
   @Module({})
@@ -32,14 +33,14 @@ export function buildAppModule(cfg: AppConfig): DynamicModule {
       ConfigModule,
       DbModule,
       JwtModule.register({ global: true, secret: cfg.jwtSecret, signOptions: { expiresIn: '12h' } }),
-      AuthModule, CatalogModule, TablesModule, ShiftsModule, OrdersModule, ReportsModule, HealthModule,
+      AuthModule, CatalogModule, TablesModule, ShiftsModule, OrdersModule, ReportsModule, HealthModule, DayModule,
     ],
     providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
   };
 }
 
 export async function createApp(cfg: AppConfig): Promise<INestApplication> {
-  const app = await NestFactory.create(buildAppModule(cfg), { logger: ['error', 'warn', 'log'] });
+  const app = await NestFactory.create(buildAppModule(cfg), { logger: process.env.JEST_WORKER_ID ? ['error'] : ['error', 'warn', 'log'] });
   app.use(requestIdMiddleware);
   app.use(helmet());
   app.enableCors({ origin: cfg.corsOrigin, credentials: false });

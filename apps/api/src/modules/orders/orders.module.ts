@@ -6,7 +6,7 @@ import { AuthUser, CurrentUser, RequirePermissions } from '../../common/auth-con
 import { P } from '../../common/permissions';
 import { OrdersService } from './orders.service';
 import {
-  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, UpdateItemDto, VersionDto, VoidItemDto,
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, TransferOrdersDto, UpdateItemDto, VersionDto, VoidItemDto,
 } from './orders.dto';
 
 @ApiTags('orders') @ApiBearerAuth()
@@ -19,6 +19,12 @@ export class OrdersController {
 
   @Post() @RequirePermissions(P.ORDER_WRITE)
   create(@CurrentUser() u: AuthUser, @Body() dto: CreateOrderDto) { return this.svc.create(u, dto); }
+
+  @Post('transfer') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
+  transfer(@CurrentUser() u: AuthUser, @Body() dto: TransferOrdersDto) { return this.svc.transfer(u, dto); }
+
+  @Get(':id/history') @RequirePermissions(P.ORDER_READ)
+  history(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string) { return this.svc.history(u, id); }
 
   @Get(':id') @RequirePermissions(P.ORDER_READ)
   get(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string) { return this.svc.get(u, id); }

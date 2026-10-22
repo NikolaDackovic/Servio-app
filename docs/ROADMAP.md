@@ -55,7 +55,13 @@ Legenda: ✅ urađeno i pokriveno testom · 🟡 delimično · ⬜ nije započet
 ## Faza 7 — Napredno
 - ⬜ Više lokala u UI, hibridna sinhronizacija (strategija u ARCHITECTURE.md), dostava, loyalty, kiosk, QR meni
 
-## Sledeći konkretan korak (iteracija 2)
+## Sledeći konkretan korak (iteracija 3 — ADMIN: robno)
+1. Dobavljači, skladišta, ulazni dokument (nacrt → proknjižen → storniran), kartica artikla, prosečna nabavna cena.
+2. Normativi sa verzijama i automatski utrošak pri prodaji (idempotentno po stavci).
+3. Zaposleni i uloge kroz ADMIN (PIN, lozinka, deaktivacija).
+4. Popusti, premeštanje računa na drugi sto, podela računa po stavkama.
+
+## Posle toga (štampa i KDS)
 1. Pripremne pozicije + rutiranje + `print_jobs` (tabela, migracija, servis, testovi).
 2. WebSocket gateway + KDS ekran (prijem ture, statusi stavki, prikaz prekida veze).
 3. Print Bridge v0: Node servis za Windows sa ESC/POS preko mreže (TCP 9100) i Windows spooler adapterom, testni (SIMULATED) adapter, red i retry.

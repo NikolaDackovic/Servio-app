@@ -2,7 +2,10 @@
 
 ## Pregled
 
-Modularni monolit: jedan backend proces sa jasno odvojenim poslovnim modulima, jedna PostgreSQL baza, više klijenata (kasa, backoffice, mobilni konobar, KDS) koji koriste isti verzionisani REST API.
+Modularni monolit: jedan backend proces sa jasno odvojenim poslovnim modulima, jedna PostgreSQL baza, više klijenata koji koriste isti verzionisani REST API:
+- **KASA** (`apps/web`, port 5173 / 8080) — touch aplikacija samo za kucanje, naplatu, smene i dan.
+- **ADMIN** (`apps/admin`, port 5174 / 8081) — backoffice: artikli, kalendar, računi, izveštaji; levi meni, prijava lozinkom.
+- Kasnije: KDS, mobilni konobar. Prava se proveravaju na API-ju, pa podela na aplikacije nije bezbednosna granica već radna.
 
 ```
  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
@@ -32,11 +35,12 @@ Modularni monolit: jedan backend proces sa jasno odvojenim poslovnim modulima, j
 apps/api          NestJS backend
   src/db          šema (Drizzle), konekcija, migrator, seed (DEMO)
   src/common      auth/prava, audit, novac, greške, request-id, bezbednost
-  src/modules     auth, catalog, tables, shifts, orders, reports, health
+  src/modules     auth, catalog, tables, shifts (kasa), day (poslovni dan, smene zaposlenih), orders, reports, health
   migrations      SQL migracije (u repozitorijumu, pregledne)
   test/unit       čista poslovna logika
   test/e2e        integracioni testovi kroz HTTP nad pravom PostgreSQL bazom
-apps/web          React + Vite + TypeScript (kasa, backoffice, PWA manifest)
+apps/web          KASA: React + Vite + TypeScript (touch, PWA manifest); deli komponente sa adminom
+apps/admin        ADMIN/backoffice: React + Vite, koristi zajedničke komponente iz apps/web/src (@shared)
 docs              arhitektura, plan, baza, API, štampa, instalacija, testiranje
 ```
 
@@ -82,3 +86,9 @@ Svaka izmena porudžbine: transakcija → `SELECT ... FOR UPDATE` na redu porud�
 - Izolacija: svaki upit je filtriran po organizaciji/lokalu iz tokena; tuđi lokal/organizacija vraća 404/401.
 - Audit log u istoj transakciji kao promena; tajne se ne upisuju u logove.
 - Request-ID u svakom odgovoru i grešci (`X-Request-Id`).
+
+### ADR-007: Poslovni dan i smena zaposlenog (iteracija 2)
+- **Poslovni dan** (`business_days`): najviše jedan otvoren po lokalu (parcijalni jedinstveni indeks). Računi, plaćanja i kase nose `business_day_id`, pa promet posle ponoći pripada danu, a ne kalendarskom datumu. Zaključak je moguć samo bez otvorenih računa i otvorenih kasa; čuva snimak obračuna.
+- **Smena kase** (`cash_shifts`, gotovina po uređaju) i **smena zaposlenog** (`staff_shifts`, pazar po konobaru) su namerno odvojene: na jednoj kasi radi više konobara, a konobar može naplaćivati i na telefonu.
+- Smena zaposlenog počinje prvom radnjom (otvaranje računa / naplata), ne prijavom. Plaćanje nosi `staff_shift_id`, pa je specifikacija pazara tačna i kada konobar preuzme tuđ sto.
+- Kraj smene je moguć tek kada na zaposlenom nema otvorenih računa — prebacuju se drugom (`POST /orders/transfer`, sve-ili-ništa, zaključavanje u stalnom redosledu).

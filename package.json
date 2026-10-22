@@ -7,10 +7,11 @@
   "scripts": {
     "dev:api": "npm run start:dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
-    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "build": "npm run build -w apps/api && npm run build -w apps/web && npm run build -w apps/admin",
     "test": "npm test -w apps/api",
-    "typecheck": "npm run typecheck -w apps/api && npx -w apps/web tsc --noEmit",
+    "typecheck": "npm run typecheck -w apps/api && npx -w apps/web tsc --noEmit && npx -w apps/admin tsc --noEmit",
     "db:migrate": "npm run db:migrate -w apps/api",
-    "db:seed": "npm run seed -w apps/api"
+    "db:seed": "npm run seed -w apps/api",
+    "dev:admin": "npm run dev -w apps/admin"
   }
 }

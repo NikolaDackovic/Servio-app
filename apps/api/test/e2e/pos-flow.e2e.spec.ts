@@ -73,6 +73,14 @@ describe('Scenario A — prodaja u kafiću', () => {
     expect(dup.body.error.code).toBe('DUPLICATE');
   });
 
+  it('bez otvorenog poslovnog dana kasa ne radi; kasir otvara dan', async () => {
+    const r = await ctx.http().post(api('/orders')).set(auth(waiter)).send({}).expect(409);
+    expect(r.body.error.code).toBe('DAY_NOT_OPEN');
+    await ctx.http().post(api('/business-days/open')).set(auth(waiter)).send({}).expect(403);
+    const d = await ctx.http().post(api('/business-days/open')).set(auth(cashier)).send({}).expect(201);
+    expect(d.body.status).toBe('OPEN');
+  });
+
   it('naplata bez otvorene smene je odbijena', async () => {
     const o = await ctx.http().post(api('/orders')).set(auth(waiter)).send({}).expect(201);
     await ctx.http().post(api(`/orders/${o.body.id}/items`)).set(auth(waiter)).send({ productId: await productId(ctx, waiter, 'TA1') }).expect(201);

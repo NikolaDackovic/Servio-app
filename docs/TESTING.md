@@ -11,7 +11,15 @@ TEST_DATABASE_URL=postgresql://… npm test # druga test baza
 ```
 Integracioni testovi pre svakog fajla brišu šemu test baze, primenjuju **sve** SQL migracije i učitavaju demo seed, zatim pokreću pravi NestJS server i šalju HTTP zahteve. Nema mock-ova baze.
 
-## Rezultati — iteracija 1 (22.10.2026, Node 22.22, PostgreSQL 16, Linux)
+## Rezultati — iteracija 2 (22.10.2026, Node 22.22, PostgreSQL 16, Linux)
+
+**44 / 44 prošlo** (29 iz iteracije 1 + 15 novih u `test/e2e/day-shift.e2e.spec.ts`). Na Windowsu sa PostgreSQL 18 korisnik je potvrdio 29/29 za iteraciju 1.
+
+Novi testovi: bez otvorenog dana nema računa ni smene kase · konobar ne može da otvori dan · dvostruko otvaranje dana · specifikacija pazara · kraj smene blokiran dok postoje otvoreni stolovi · prebacivanje tuđeg računa odbijeno, sve-ili-ništa · prebacivanje i pregled kod novog konobara · sačuvana specifikacija · istorija računa · zaključak blokiran (računi, pa kasa) · zaključak sa snimkom i zatvorenim smenama · kalendar i detalji dana · promet posle ponoći ostaje u poslovnom danu · novi dan mora biti posle poslednjeg.
+
+UI provera (headless Chrome): KASA — otvaranje dana i kase, kucanje kroz kategorije, količina preko tastature, slanje, naplata, prebacivanje stola, kraj smene, zatvaranje kase, zaključak dana; ADMIN — kalendar, detalji dana, računi dana sa istorijom, artikli. Bez grešaka u konzoli. Pronađeno i ispravljeno: posle odjave je ostajao ekran prethodnog korisnika; prostorije i stolovi nisu bili prirodno sortirani; preklapanje dugmeta „+ račun“ na mapi.
+
+## Rezultati — iteracija 1
 
 **29 / 29 prošlo.** Posle ispravki pokrenuto 7 puta zaredom — svaki put 29/29, bez nestabilnih (flaky) testova.
 
