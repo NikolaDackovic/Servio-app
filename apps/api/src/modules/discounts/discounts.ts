@@ -1,3 +1,4 @@
+import { ToBool } from '../../common/to-bool';
 import { Body, Controller, Get, Inject, Injectable, Module, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -26,7 +27,7 @@ class UpdateDiscountDto {
   @IsOptional() @IsBoolean() active?: boolean;
 }
 class ListQuery {
-  @IsOptional() @Type(() => Boolean) @IsBoolean() includeInactive?: boolean;
+  @IsOptional() @ToBool() @IsBoolean() includeInactive?: boolean;
 }
 
 function checkPercent(p: string) {

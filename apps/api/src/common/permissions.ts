@@ -19,6 +19,9 @@ export const P = {
   AUDIT_READ: 'audit.read',
   KDS_USE: 'kds.use', // rad na KDS ekranu (statusi tiketa i stavki)
   SETTINGS_MANAGE: 'settings.manage', // pripremne pozicije, štampači, Print Bridge, fiskalni pregled
+  STOCK_READ: 'stock.read', // stanje lagera, kartica artikla, dokumenta (pregled)
+  STOCK_WRITE: 'stock.write', // partneri, skladišta, nacrti dokumenata, normativi, uvoz
+  STOCK_POST: 'stock.post', // knjiženje i storniranje robnih dokumenata
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];
@@ -31,7 +34,8 @@ export const DEFAULT_ROLES: { code: string; name: string; permissions: Permissio
   {
     code: 'MANAGER', name: 'Menadžer',
     permissions: [P.CATALOG_READ, P.CATALOG_WRITE, P.TABLE_READ, P.TABLE_WRITE, P.ORDER_READ, P.ORDER_READ_ALL,
-      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.DISCOUNT_MANAGE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ, P.KDS_USE, P.SETTINGS_MANAGE],
+      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.DISCOUNT_MANAGE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ, P.KDS_USE, P.SETTINGS_MANAGE,
+      P.STOCK_READ, P.STOCK_WRITE, P.STOCK_POST],
   },
   {
     code: 'CASHIER', name: 'Kasir',

@@ -15,6 +15,7 @@ import { ensureStaffShift, requireOpenDay } from '../day/day.helpers';
 import { EventBus, RealtimeEvent } from '../../common/events';
 import { FiscalService } from '../fiscal/fiscal';
 import { routeBatch, routeVoids } from '../prep/routing';
+import { consumeForOrder } from '../stock/engine';
 import { fiscalReceipts, kdsTickets, prepStations } from '../../db/schema';
 import { summary as fiscalSummary } from '../fiscal/fiscal';
 import {
@@ -227,6 +228,7 @@ export class OrdersService {
         .where(and(eq(products.id, dto.productId), eq(products.organizationId, u.organizationId)));
       if (!p) throw Invalid('INVALID_PRODUCT', 'Proizvod ne postoji');
       if (!p.product.active) throw Invalid('PRODUCT_INACTIVE', 'Proizvod nije aktivan');
+      if (!p.product.isSellable) throw Invalid('PRODUCT_NOT_SELLABLE', `„${p.product.name}“ nije artikal za prodaju (sirovina)`);
       const q = qty(dto.quantity ?? '1');
       const [item] = await tx.insert(orderItems).values({
         orderId: o.id, productId: p.product.id, name: p.product.name, unitPrice: p.product.price,
@@ -444,6 +446,8 @@ export class OrdersService {
         await audit(tx, u, 'order.close', 'order', o.id, { total: o.total });
         // Fiskalni zahtev nastaje u istoj transakciji; šalje se provajderu posle commit-a (naplata ne zavisi od njega).
         fiscalId = await this.fiscal.enqueueForPaidOrder(tx, { ...o, paidTotal: money(paid), status: 'PAID' });
+        // Automatski utrošak robe (normativi / artikli sa zalihom) — u istoj transakciji, idempotentno po stavci.
+        await consumeForOrder(tx, o.id, u.userId);
       }
       ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
 

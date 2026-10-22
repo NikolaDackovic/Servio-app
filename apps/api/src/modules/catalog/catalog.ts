@@ -1,3 +1,4 @@
+import { ToBool } from '../../common/to-bool';
 import {
   Body, Controller, Get, Inject, Injectable, Module, Param, ParseUUIDPipe, Patch, Post, Query,
 } from '@nestjs/common';
@@ -34,6 +35,8 @@ class UpdateCategoryDto {
 }
 
 class CreateProductDto {
+  @IsOptional() @IsBoolean() trackStock?: boolean;
+  @IsOptional() @IsBoolean() isSellable?: boolean;
   @IsUUID() categoryId: string;
   @IsUUID() taxRateId: string;
   @IsString() @Length(1, 32) code: string;
@@ -48,6 +51,8 @@ class CreateProductDto {
   @IsOptional() @IsUUID() prepStationId?: string | null;
 }
 class UpdateProductDto {
+  @IsOptional() @IsBoolean() trackStock?: boolean;
+  @IsOptional() @IsBoolean() isSellable?: boolean;
   @IsOptional() @IsUUID() prepStationId?: string | null;
   @IsOptional() @IsUUID() categoryId?: string;
   @IsOptional() @IsUUID() taxRateId?: string;
@@ -62,7 +67,11 @@ class UpdateProductDto {
 class ProductQuery {
   @IsOptional() @IsUUID() categoryId?: string;
   @IsOptional() @IsString() @Length(1, 60) search?: string;
-  @IsOptional() @Type(() => Boolean) @IsBoolean() includeInactive?: boolean;
+  @IsOptional() @ToBool() @IsBoolean() includeInactive?: boolean;
+  /** true = samo artikli za prodaju (kasa); false = samo sirovine */
+  @IsOptional() @ToBool() @IsBoolean() sellable?: boolean;
+  /** samo artikli sa vođenjem zalihe */
+  @IsOptional() @ToBool() @IsBoolean() trackStock?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) pageSize?: number;
 }
@@ -130,6 +139,8 @@ export class CatalogService {
     const conds: SQL[] = [eq(products.organizationId, u.organizationId)];
     if (!q.includeInactive) conds.push(eq(products.active, true));
     if (q.categoryId) conds.push(eq(products.categoryId, q.categoryId));
+    if (q.sellable !== undefined) conds.push(eq(products.isSellable, q.sellable));
+    if (q.trackStock) conds.push(eq(products.trackStock, true));
     if (q.search) {
       const term = `%${q.search.replace(/[%_\\]/g, '\\$&')}%`;
       conds.push(or(ilike(products.name, term), ilike(products.code, term), ilike(products.barcode, term))!);
@@ -141,7 +152,7 @@ export class CatalogService {
         id: products.id, code: products.code, barcode: products.barcode, name: products.name, unit: products.unit,
         price: products.price, color: products.color, sortOrder: products.sortOrder, active: products.active,
         categoryId: products.categoryId, taxRateId: products.taxRateId, taxLabel: taxRates.label, taxRate: taxRates.rate,
-        prepStationId: products.prepStationId,
+        prepStationId: products.prepStationId, trackStock: products.trackStock, isSellable: products.isSellable,
       })
       .from(products).innerJoin(taxRates, eq(taxRates.id, products.taxRateId))
       .where(where).orderBy(asc(products.sortOrder), asc(products.name))

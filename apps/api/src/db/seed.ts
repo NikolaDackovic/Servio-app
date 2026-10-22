@@ -99,10 +99,35 @@ export async function seed(databaseUrl: string, pinPepper: string) {
         [hrana, 'H004', 'Proja (posebna stopa – demo)', '200.00', vat10.id],
       ];
       let i = 0;
+      const byCode: Record<string, string> = {};
       for (const [c, code, name, price, tax] of prods) {
-        const [p] = await tx.insert(s.products).values({ organizationId: org.id, categoryId: c.id, taxRateId: tax, code, name, price, sortOrder: i++ }).returning();
+        // Flaširana pića se vode na zalihi direktno (prodaja troši sam artikal); ostalo preko normativa.
+        const trackStock = ['S001', 'S003'].includes(code);
+        const [p] = await tx.insert(s.products).values({ organizationId: org.id, categoryId: c.id, taxRateId: tax, code, name, price, sortOrder: i++, trackStock }).returning();
         await tx.insert(s.productPriceChanges).values({ productId: p.id, oldPrice: null, newPrice: price, userId: adminUser.id });
+        byCode[code] = p.id;
       }
+
+      // Lager (demo): skladišta, sirovine (ne prodaju se na kasi), normativi, dobavljač. Bez demo dokumenata —
+      // stanje je 0 dok se ne proknjiži prijemnica.
+      const [whMain] = await tx.insert(s.warehouses).values({ locationId: loc.id, name: 'Glavni magacin', isDefault: true }).returning();
+      const [whBar] = await tx.insert(s.warehouses).values({ locationId: loc.id, name: 'Šank' }).returning();
+      await tx.update(s.prepStations).set({ warehouseId: whBar.id }).where(eq(s.prepStations.id, stBar.id));
+      const sirovine = await cat('Sirovine', '#777777', 9);
+      const raw: [string, string, string][] = [['R001', 'Kafa u zrnu', 'kg'], ['R002', 'Mleko', 'l'], ['R003', 'Mleveno meso', 'kg'], ['R004', 'Lepinja', 'kom']];
+      for (const [code, name, unit] of raw) {
+        const [p] = await tx.insert(s.products).values({ organizationId: org.id, categoryId: sirovine.id, taxRateId: vat20.id, code, name, unit, price: '0.00', trackStock: true, isSellable: false, sortOrder: i++ }).returning();
+        await tx.insert(s.productPriceChanges).values({ productId: p.id, oldPrice: null, newPrice: '0.00', userId: adminUser.id });
+        byCode[code] = p.id;
+      }
+      const recipe = async (code: string, lines: [string, string][]) => {
+        const [r] = await tx.insert(s.recipes).values({ productId: byCode[code], version: 1, status: 'ACTIVE', activatedAt: new Date(), createdById: adminUser.id, note: 'Demo normativ' }).returning();
+        await tx.insert(s.recipeLines).values(lines.map(([c, q]) => ({ recipeId: r.id, componentId: byCode[c], quantity: q })));
+      };
+      await recipe('K001', [['R001', '0.0080']]);
+      await recipe('K002', [['R001', '0.0080'], ['R002', '0.1200']]);
+      await recipe('H002', [['R003', '0.2500'], ['R004', '1.0000']]);
+      await tx.insert(s.partners).values({ organizationId: org.id, name: 'Demo dobavljač d.o.o.', taxId: '100000024', city: 'Beograd', kind: 'SUPPLIER' });
       let order = 0;
       for (const [name, percent] of [['Popust 10%', '10'], ['Popust 20%', '20'], ['Popust 30%', '30'], ['Popust 40%', '40'], ['Loyalty 15%', '15']] as const) {
         await tx.insert(s.discounts).values({ organizationId: org.id, name, percent, sortOrder: order++ });
@@ -113,6 +138,7 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       return {
         created: true, organizationId: org.id, locationId: loc.id, posDeviceId: pos1.id, kdsDeviceId: kds.id,
         bridgeDeviceId: bridge.id, bridgeKey, stations: { bar: stBar.id, kitchen: stKitchen.id },
+        warehouses: { main: whMain.id, bar: whBar.id },
       };
     });
   } finally {

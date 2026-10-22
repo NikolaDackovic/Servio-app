@@ -14,7 +14,7 @@ export interface Ctx {
   app: INestApplication;
   http: () => ReturnType<typeof request>;
   pool: Pool;
-  ids: { org: string; location: string; posDevice: string; kdsDevice: string; bridgeKey: string; stations: { bar: string; kitchen: string } };
+  ids: { org: string; location: string; posDevice: string; kdsDevice: string; bridgeKey: string; stations: { bar: string; kitchen: string }; warehouses: { main: string; bar: string } };
 }
 
 /** Svaki test fajl dobija čistu bazu: šema se briše, primenjuju se SVE migracije, pa demo seed. */
@@ -42,6 +42,7 @@ export async function setupApp(): Promise<Ctx> {
     ids: {
       org: s.organizationId, location: (s as any).locationId, posDevice: (s as any).posDeviceId,
       kdsDevice: (s as any).kdsDeviceId, bridgeKey: (s as any).bridgeKey, stations: (s as any).stations,
+      warehouses: (s as any).warehouses,
     },
   };
 }

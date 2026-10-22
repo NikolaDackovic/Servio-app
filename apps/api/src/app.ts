@@ -22,6 +22,10 @@ import { EventsModule } from './common/events';
 import { FiscalModule } from './modules/fiscal/fiscal';
 import { PrepModule } from './modules/prep/prep';
 import { attachRealtime } from './modules/realtime/realtime';
+import { StockModule } from './modules/stock/stock';
+import { RecipesModule } from './modules/stock/recipes';
+import { ImportExportModule } from './modules/stock/import-export';
+import { NestExpressApplication } from '@nestjs/platform-express';
 
 export function buildAppModule(cfg: AppConfig): DynamicModule {
   @Module({})
@@ -38,7 +42,7 @@ export function buildAppModule(cfg: AppConfig): DynamicModule {
       ConfigModule,
       DbModule,
       JwtModule.register({ global: true, secret: cfg.jwtSecret, signOptions: { expiresIn: '12h' } }),
-      EventsModule, FiscalModule, PrepModule,
+      EventsModule, FiscalModule, PrepModule, StockModule, RecipesModule, ImportExportModule,
       AuthModule, CatalogModule, TablesModule, ShiftsModule, OrdersModule, ReportsModule, HealthModule, DayModule, DiscountsModule,
     ],
     providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
@@ -46,7 +50,8 @@ export function buildAppModule(cfg: AppConfig): DynamicModule {
 }
 
 export async function createApp(cfg: AppConfig): Promise<INestApplication> {
-  const app = await NestFactory.create(buildAppModule(cfg), { logger: process.env.JEST_WORKER_ID ? ['error'] : ['error', 'warn', 'log'] });
+  const app = await NestFactory.create<NestExpressApplication>(buildAppModule(cfg), { logger: process.env.JEST_WORKER_ID ? ['error'] : ['error', 'warn', 'log'] });
+  app.useBodyParser('json', { limit: '8mb' }); // uvoz CSV/XLSX (base64) — ostali zahtevi su mali
   app.use(requestIdMiddleware);
   app.use(helmet());
   app.enableCors({ origin: cfg.corsOrigin, credentials: false });

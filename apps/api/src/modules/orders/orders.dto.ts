@@ -1,3 +1,4 @@
+import { ToBool } from '../../common/to-bool';
 import { Type } from 'class-transformer';
 import { ValidateNested } from 'class-validator';
 import {
@@ -57,7 +58,7 @@ export class ListOrdersQuery {
   @IsOptional() @IsUUID() tableId?: string;
   @IsOptional() @IsUUID() businessDayId?: string;
   @IsOptional() @IsUUID() waiterId?: string;
-  @IsOptional() @Type(() => Boolean) @IsBoolean() mine?: boolean;
+  @IsOptional() @ToBool() @IsBoolean() mine?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) pageSize?: number;
 }

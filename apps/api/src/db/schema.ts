@@ -11,7 +11,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  pgTable, uuid, text, varchar, boolean, integer, numeric, timestamp, jsonb, pgEnum, date,
+  pgTable, uuid, text, varchar, boolean, integer, numeric, timestamp, jsonb, pgEnum, date, bigserial,
   uniqueIndex, index, primaryKey, check,
 } from 'drizzle-orm/pg-core';
 
@@ -142,6 +142,10 @@ export const products = pgTable('products', {
   color: varchar('color', { length: 16 }),
   /** Pripremna pozicija artikla — ima prednost nad pozicijom kategorije. */
   prepStationId: uuid('prep_station_id'),
+  /** Vodi se zaliha (lager) za ovaj artikal: prodaja ga troši (ako nema normativ), dokumenti ga menjaju. */
+  trackStock: boolean('track_stock').notNull().default(false),
+  /** Prodaje se na kasi. Sirovine (npr. kafa u zrnu) imaju false i ne prikazuju se na kasi. */
+  isSellable: boolean('is_sellable').notNull().default(true),
   sortOrder: integer('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
@@ -499,4 +503,171 @@ export const fiscalReceipts = pgTable('fiscal_receipts', {
   uniqueIndex('fiscal_order_tx_uq').on(t.orderId, t.transactionType),
   index('fiscal_queue_idx').on(t.status, t.nextAttemptAt),
   check('fiscal_signed_has_number', sql`${t.status} <> 'SIGNED' OR (${t.invoiceNumber} IS NOT NULL AND ${t.signedAt} IS NOT NULL)`),
+]);
+
+// ---------- Faza 4: partneri, skladišta, robna dokumenta, kartica, normativi ----------
+
+/** Količine na lageru: 4 decimale (normativi, npr. 0,0075 kg kafe). Nabavne cene: 4 decimale. */
+const sqty = (name: string) => numeric(name, { precision: 16, scale: 4 });
+const cost = (name: string) => numeric(name, { precision: 16, scale: 4 });
+
+export const partnerKind = pgEnum('partner_kind', ['SUPPLIER', 'CUSTOMER', 'BOTH']);
+export const stockDocKind = pgEnum('stock_doc_kind', ['RECEIPT', 'ISSUE', 'RETURN', 'TRANSFER', 'WRITE_OFF', 'INTERNAL', 'STOCKTAKE']);
+export const stockDocStatus = pgEnum('stock_doc_status', ['DRAFT', 'POSTED', 'CANCELLED']);
+export const movementSource = pgEnum('movement_source', ['DOCUMENT', 'SALE', 'REVERSAL']);
+export const recipeStatus = pgEnum('recipe_status', ['DRAFT', 'ACTIVE', 'RETIRED']);
+
+export const partners = pgTable('partners', {
+  id: id(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id),
+  name: text('name').notNull(),
+  kind: partnerKind('kind').notNull().default('SUPPLIER'),
+  taxId: varchar('tax_id', { length: 9 }),
+  registrationNo: varchar('registration_no', { length: 8 }),
+  address: text('address'),
+  city: text('city'),
+  email: varchar('email', { length: 120 }),
+  phone: varchar('phone', { length: 40 }),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('partners_org_taxid_uq').on(t.organizationId, t.taxId).where(sql`${t.taxId} IS NOT NULL`),
+  index('partners_org_name_idx').on(t.organizationId, t.name),
+]);
+
+export const warehouses = pgTable('warehouses', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  name: text('name').notNull(),
+  isDefault: boolean('is_default').notNull().default(false),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('warehouses_location_name_uq').on(t.locationId, t.name),
+  uniqueIndex('warehouses_one_default_uq').on(t.locationId).where(sql`${t.isDefault}`),
+]);
+
+/** Trenutno stanje po (skladište, artikal). Menja se ISKLJUČIVO zajedno sa upisom kretanja (stock_movements). */
+export const stockBalances = pgTable('stock_balances', {
+  warehouseId: uuid('warehouse_id').notNull().references(() => warehouses.id),
+  productId: uuid('product_id').notNull().references(() => products.id),
+  quantity: sqty('quantity').notNull().default('0'),
+  /** Prosečna ponderisana nabavna cena po jedinici */
+  avgCost: cost('avg_cost').notNull().default('0'),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.warehouseId, t.productId] }),
+  check('stock_balances_avg_nonneg', sql`${t.avgCost} >= 0`),
+]);
+
+export const stockDocuments = pgTable('stock_documents', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  kind: stockDocKind('kind').notNull(),
+  status: stockDocStatus('status').notNull().default('DRAFT'),
+  /** Broj se dodeljuje pri knjiženju (bez rupa zbog obrisanih nacrta), po vrsti i lokalu. */
+  number: integer('number'),
+  warehouseId: uuid('warehouse_id').notNull().references(() => warehouses.id),
+  targetWarehouseId: uuid('target_warehouse_id').references(() => warehouses.id),
+  partnerId: uuid('partner_id').references(() => partners.id),
+  docDate: date('doc_date').notNull(),
+  externalNumber: varchar('external_number', { length: 60 }),
+  note: text('note'),
+  version: integer('version').notNull().default(0),
+  createdById: uuid('created_by_id').notNull().references(() => users.id),
+  postedById: uuid('posted_by_id').references(() => users.id),
+  postedAt: ts('posted_at'),
+  cancelledById: uuid('cancelled_by_id').references(() => users.id),
+  cancelledAt: ts('cancelled_at'),
+  cancelReason: text('cancel_reason'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('stock_documents_number_uq').on(t.locationId, t.kind, t.number).where(sql`${t.number} IS NOT NULL`),
+  index('stock_documents_list_idx').on(t.locationId, t.kind, t.status),
+  check('stock_documents_posted_has_number', sql`${t.status} = 'DRAFT' OR ${t.number} IS NOT NULL OR ${t.postedAt} IS NULL`),
+  check('stock_documents_transfer_target', sql`${t.kind} <> 'TRANSFER' OR (${t.targetWarehouseId} IS NOT NULL AND ${t.targetWarehouseId} <> ${t.warehouseId})`),
+  check('stock_documents_cancel_reason', sql`${t.status} <> 'CANCELLED' OR ${t.cancelReason} IS NOT NULL`),
+]);
+
+export const stockDocumentLines = pgTable('stock_document_lines', {
+  id: id(),
+  documentId: uuid('document_id').notNull().references(() => stockDocuments.id, { onDelete: 'cascade' }),
+  productId: uuid('product_id').notNull().references(() => products.id),
+  /** Popis: izbrojana količina (može biti 0). Ostala dokumenta: količina > 0. */
+  quantity: sqty('quantity').notNull(),
+  unitCost: cost('unit_cost'),
+  /** Popis: knjižno stanje u trenutku knjiženja (snimak). */
+  bookQuantity: sqty('book_quantity'),
+  note: text('note'),
+  sortOrder: integer('sort_order').notNull().default(0),
+}, (t) => [
+  index('stock_document_lines_doc_idx').on(t.documentId),
+  uniqueIndex('stock_document_lines_doc_product_uq').on(t.documentId, t.productId),
+  check('stock_document_lines_qty_nonneg', sql`${t.quantity} >= 0`),
+  check('stock_document_lines_cost_nonneg', sql`${t.unitCost} IS NULL OR ${t.unitCost} >= 0`),
+]);
+
+export const recipes = pgTable('recipes', {
+  id: id(),
+  productId: uuid('product_id').notNull().references(() => products.id),
+  version: integer('version').notNull(),
+  status: recipeStatus('status').notNull().default('DRAFT'),
+  note: text('note'),
+  createdById: uuid('created_by_id').notNull().references(() => users.id),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  activatedAt: ts('activated_at'),
+  retiredAt: ts('retired_at'),
+}, (t) => [
+  uniqueIndex('recipes_product_version_uq').on(t.productId, t.version),
+  uniqueIndex('recipes_one_active_uq').on(t.productId).where(sql`${t.status} = 'ACTIVE'`),
+]);
+
+export const recipeLines = pgTable('recipe_lines', {
+  id: id(),
+  recipeId: uuid('recipe_id').notNull().references(() => recipes.id, { onDelete: 'cascade' }),
+  componentId: uuid('component_id').notNull().references(() => products.id),
+  /** Količina komponente za 1 jedinicu prodatog artikla, u jedinici mere komponente */
+  quantity: sqty('quantity').notNull(),
+}, (t) => [
+  uniqueIndex('recipe_lines_recipe_component_uq').on(t.recipeId, t.componentId),
+  check('recipe_lines_qty_pos', sql`${t.quantity} > 0`),
+]);
+
+/**
+ * Kartica artikla: svako kretanje zalihe. Nikad se ne briše ni menja — storno je novo, suprotno kretanje.
+ * balanceAfter/avgCostAfter = stanje posle ovog kretanja (redosled je serijalizovan zaključavanjem stanja).
+ */
+export const stockMovements = pgTable('stock_movements', {
+  id: id(),
+  /** Redosled upisa (unutar iste transakcije svi redovi imaju isto vreme) — kartica se sortira po njemu. */
+  seq: bigserial('seq', { mode: 'number' }).notNull(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  warehouseId: uuid('warehouse_id').notNull().references(() => warehouses.id),
+  productId: uuid('product_id').notNull().references(() => products.id),
+  quantity: sqty('quantity').notNull(),
+  unitCost: cost('unit_cost').notNull(),
+  value: money('value').notNull(),
+  balanceAfter: sqty('balance_after').notNull(),
+  avgCostAfter: cost('avg_cost_after').notNull(),
+  source: movementSource('source').notNull(),
+  documentId: uuid('document_id').references(() => stockDocuments.id),
+  documentLineId: uuid('document_line_id').references(() => stockDocumentLines.id),
+  orderId: uuid('order_id').references(() => orders.id),
+  orderItemId: uuid('order_item_id').references(() => orderItems.id),
+  recipeId: uuid('recipe_id').references(() => recipes.id),
+  reversesMovementId: uuid('reverses_movement_id'),
+  createdById: uuid('created_by_id').references(() => users.id),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  index('stock_movements_card_idx').on(t.warehouseId, t.productId, t.seq),
+  index('stock_movements_doc_idx').on(t.documentId),
+  /** Utrošak pri prodaji: najviše jednom po (stavka računa, artikal/komponenta). */
+  uniqueIndex('stock_movements_sale_uq').on(t.orderItemId, t.productId).where(sql`${t.source} = 'SALE'`),
+  /** Knjiženje dokumenta: najviše jedno kretanje po (stavka dokumenta, skladište). */
+  uniqueIndex('stock_movements_doc_line_uq').on(t.documentLineId, t.warehouseId).where(sql`${t.source} = 'DOCUMENT'`),
+  /** Svako kretanje se stornira najviše jednom. */
+  uniqueIndex('stock_movements_reversal_uq').on(t.reversesMovementId).where(sql`${t.reversesMovementId} IS NOT NULL`),
+  check('stock_movements_qty_nonzero', sql`${t.quantity} <> 0`),
 ]);
