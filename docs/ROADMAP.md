@@ -59,7 +59,7 @@ Legenda: ✅ urađeno i pokriveno testom · 🟡 delimično · ⬜ nije započet
 1. Dobavljači, skladišta, ulazni dokument (nacrt → proknjižen → storniran), kartica artikla, prosečna nabavna cena.
 2. Normativi sa verzijama i automatski utrošak pri prodaji (idempotentno po stavci).
 3. Zaposleni i uloge kroz ADMIN (PIN, lozinka, deaktivacija).
-4. Popusti, premeštanje računa na drugi sto, podela računa po stavkama.
+4. Više cenovnika i vremenski cenovnici (srećni sat) — izbor na dugmetu Cenovnik.
 
 ## Posle toga (štampa i KDS)
 1. Pripremne pozicije + rutiranje + `print_jobs` (tabela, migracija, servis, testovi).

@@ -21,9 +21,9 @@ const money = (name: string) => numeric(name, { precision: 14, scale: 2 });
 const qty = (name: string) => numeric(name, { precision: 12, scale: 3 });
 
 export const deviceKind = pgEnum('device_kind', ['POS', 'MOBILE', 'KDS']);
-export const orderStatus = pgEnum('order_status', ['OPEN', 'PAID', 'CANCELLED']);
+export const orderStatus = pgEnum('order_status', ['OPEN', 'PAID', 'CANCELLED', 'MERGED']);
 export const orderItemStatus = pgEnum('order_item_status', ['NEW', 'SENT', 'VOIDED']);
-export const paymentMethod = pgEnum('payment_method', ['CASH', 'CARD', 'TRANSFER']);
+export const paymentMethod = pgEnum('payment_method', ['CASH', 'CARD', 'TRANSFER', 'REPRESENTATION']);
 export const paymentMode = pgEnum('payment_mode', ['TEST', 'LIVE']);
 export const shiftStatus = pgEnum('shift_status', ['OPEN', 'CLOSED']);
 export const cashMovementType = pgEnum('cash_movement_type', ['PAY_IN', 'PAY_OUT']);
@@ -145,6 +145,21 @@ export const productPriceChanges = pgTable('product_price_changes', {
   changedAt: ts('changed_at').notNull().defaultNow(),
 }, (t) => [index('ppc_product_idx').on(t.productId, t.changedAt)]);
 
+/** Popusti koje definiše ADMIN; na kasi se primenjuju na ceo račun (procenat). */
+export const discounts = pgTable('discounts', {
+  id: id(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id),
+  name: text('name').notNull(),
+  percent: numeric('percent', { precision: 5, scale: 2 }).notNull(),
+  sortOrder: integer('sort_order').notNull().default(0),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('discounts_org_name_uq').on(t.organizationId, t.name),
+  check('discounts_percent_range', sql`${t.percent} > 0 AND ${t.percent} <= 100`),
+]);
+
 // ---------- Sala ----------
 
 export const diningTables = pgTable('dining_tables', {
@@ -244,6 +259,20 @@ export const orders = pgTable('orders', {
   status: orderStatus('status').notNull().default('OPEN'),
   guests: integer('guests'),
   note: text('note'),
+  /** Naziv ture/podračuna na istom stolu (npr. "Pera"). */
+  tabName: varchar('tab_name', { length: 40 }),
+  discountId: uuid('discount_id').references(() => discounts.id),
+  discountPercent: numeric('discount_percent', { precision: 5, scale: 2 }).notNull().default('0'),
+  /** Zbir stavki pre popusta. total = subtotal − discountTotal. */
+  subtotal: money('subtotal').notNull().default('0'),
+  discountTotal: money('discount_total').notNull().default('0'),
+  /** Identifikacija kupca (šifra vrste ID-a iz šifarnika eFiskalizacije + broj). */
+  buyerIdType: varchar('buyer_id_type', { length: 4 }),
+  buyerId: varchar('buyer_id', { length: 40 }),
+  /** Opciono polje kupca: osnov (npr. oslobođenje od PDV-a) i broj — mapiranje na šifre pre fiskalizacije. */
+  buyerOptionalBasis: varchar('buyer_optional_basis', { length: 60 }),
+  buyerOptionalValue: varchar('buyer_optional_value', { length: 60 }),
+  mergedIntoId: uuid('merged_into_id'),
   openedById: uuid('opened_by_id').notNull().references(() => users.id),
   waiterId: uuid('waiter_id').notNull().references(() => users.id),
   closedById: uuid('closed_by_id').references(() => users.id),
@@ -264,6 +293,9 @@ export const orders = pgTable('orders', {
   index('orders_closed_at_idx').on(t.closedAt),
   index('orders_business_day_idx').on(t.businessDayId),
   check('orders_total_nonneg', sql`${t.total} >= 0`),
+  check('orders_discount_range', sql`${t.discountPercent} >= 0 AND ${t.discountPercent} <= 100`),
+  check('orders_total_is_subtotal_minus_discount', sql`${t.total} = ${t.subtotal} - ${t.discountTotal}`),
+  check('orders_buyer_complete', sql`(${t.buyerIdType} IS NULL) = (${t.buyerId} IS NULL)`),
   check('orders_paid_not_over_total', sql`${t.paidTotal} >= 0 AND ${t.paidTotal} <= ${t.total}`),
   check('orders_paid_means_settled', sql`${t.status} <> 'PAID' OR (${t.paidTotal} = ${t.total} AND ${t.closedAt} IS NOT NULL)`),
 ]);
@@ -278,6 +310,8 @@ export const orderItems = pgTable('order_items', {
   taxLabel: varchar('tax_label', { length: 4 }).notNull(),
   taxRate: numeric('tax_rate', { precision: 5, scale: 2 }).notNull(),
   lineTotal: money('line_total').notNull(),
+  /** Deo popusta računa koji otpada na ovu stavku (zbog tačne PDV rekapitulacije po stopama). */
+  discountAmount: money('discount_amount').notNull().default('0'),
   note: text('note'),
   status: orderItemStatus('status').notNull().default('NEW'),
   sendBatch: integer('send_batch'),
@@ -291,6 +325,7 @@ export const orderItems = pgTable('order_items', {
   index('order_items_order_idx').on(t.orderId),
   check('order_items_qty_pos', sql`${t.quantity} > 0`),
   check('order_items_price_nonneg', sql`${t.unitPrice} >= 0`),
+  check('order_items_discount_range', sql`${t.discountAmount} >= 0 AND ${t.discountAmount} <= ${t.lineTotal}`),
   check('order_items_void_has_reason', sql`${t.status} <> 'VOIDED' OR (${t.voidReason} IS NOT NULL AND ${t.voidedById} IS NOT NULL)`),
 ]);
 

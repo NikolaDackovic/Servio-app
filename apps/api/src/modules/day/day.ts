@@ -64,7 +64,11 @@ export async function staffShiftSummary(db: DbOrTx, s: StaffShiftRow) {
   const cash = collected.find((c) => c.method === 'CASH')?.amount ?? '0.00';
   return {
     userId: s.userId, fullName: user?.fullName, startedAt: s.startedAt, endedAt: s.endedAt,
-    collected: { total: money(sum(collected.map((c) => c.amount))), cashToHandOver: cash, byMethod: collected },
+    collected: {
+      total: money(sum(collected.filter((c) => c.method !== 'REPRESENTATION').map((c) => c.amount))),
+      representation: collected.find((c) => c.method === 'REPRESENTATION')?.amount ?? '0.00',
+      cashToHandOver: cash, byMethod: collected,
+    },
     closedReceipts: closed, voids,
     openOrders,
   };
@@ -152,7 +156,7 @@ export class DayService {
         ob.full_name AS "openedBy", cb.full_name AS "closedBy",
         (SELECT count(*)::int FROM orders o WHERE o.business_day_id = d.id AND o.status = 'PAID') AS orders,
         (SELECT coalesce(sum(o.total),0)::numeric(14,2)::text FROM orders o WHERE o.business_day_id = d.id AND o.status = 'PAID') AS gross,
-        (SELECT coalesce(sum(p.amount),0)::numeric(14,2)::text FROM payments p WHERE p.business_day_id = d.id) AS collected,
+        (SELECT coalesce(sum(p.amount),0)::numeric(14,2)::text FROM payments p WHERE p.business_day_id = d.id AND p.method <> 'REPRESENTATION') AS collected,
         (SELECT count(*)::int FROM orders o WHERE o.business_day_id = d.id AND o.status = 'OPEN') AS "openOrders"
       FROM business_days d
       JOIN users ob ON ob.id = d.opened_by_id LEFT JOIN users cb ON cb.id = d.closed_by_id

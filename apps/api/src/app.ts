@@ -17,6 +17,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { ReportsModule } from './modules/reports/reports';
 import { HealthModule } from './modules/health/health';
 import { DayModule } from './modules/day/day';
+import { DiscountsModule } from './modules/discounts/discounts';
 
 export function buildAppModule(cfg: AppConfig): DynamicModule {
   @Module({})
@@ -33,7 +34,7 @@ export function buildAppModule(cfg: AppConfig): DynamicModule {
       ConfigModule,
       DbModule,
       JwtModule.register({ global: true, secret: cfg.jwtSecret, signOptions: { expiresIn: '12h' } }),
-      AuthModule, CatalogModule, TablesModule, ShiftsModule, OrdersModule, ReportsModule, HealthModule, DayModule,
+      AuthModule, CatalogModule, TablesModule, ShiftsModule, OrdersModule, ReportsModule, HealthModule, DayModule, DiscountsModule,
     ],
     providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
   };

@@ -1,12 +1,13 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Module, Param, ParseUUIDPipe, Patch, Post, Query,
+  Body, Controller, Delete, Get, HttpCode, Module, Param, ParseUUIDPipe, Patch, Post, Put, Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser, RequirePermissions } from '../../common/auth-context';
 import { P } from '../../common/permissions';
 import { OrdersService } from './orders.service';
 import {
-  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, TransferOrdersDto, UpdateItemDto, VersionDto, VoidItemDto,
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto, RenameOrderDto,
+  SetBuyerDto, SetDiscountDto, SettleDto, TransferOrdersDto, UpdateItemDto, VersionDto, VoidItemDto,
 } from './orders.dto';
 
 @ApiTags('orders') @ApiBearerAuth()
@@ -60,6 +61,41 @@ export class OrdersController {
   @Post(':id/cancel') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
   cancel(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelOrderDto) {
     return this.svc.cancel(u, id, dto);
+  }
+
+  @Post(':id/settle') @RequirePermissions(P.PAYMENT_CREATE)
+  settle(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SettleDto) {
+    return this.svc.settle(u, id, dto);
+  }
+
+  @Put(':id/discount') @RequirePermissions(P.ORDER_WRITE, P.ORDER_DISCOUNT)
+  setDiscount(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SetDiscountDto) {
+    return this.svc.setDiscount(u, id, dto);
+  }
+
+  @Put(':id/buyer') @RequirePermissions(P.ORDER_WRITE)
+  setBuyer(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SetBuyerDto) {
+    return this.svc.setBuyer(u, id, dto);
+  }
+
+  @Patch(':id') @RequirePermissions(P.ORDER_WRITE)
+  rename(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RenameOrderDto) {
+    return this.svc.rename(u, id, dto);
+  }
+
+  @Post(':id/move-items') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
+  moveItems(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: MoveItemsDto) {
+    return this.svc.moveItems(u, id, dto);
+  }
+
+  @Post(':id/merge') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
+  merge(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: MergeOrdersDto) {
+    return this.svc.merge(u, id, dto);
+  }
+
+  @Post(':id/void-all') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE, P.ORDER_VOID)
+  voidAll(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: VoidItemDto) {
+    return this.svc.voidAll(u, id, dto);
   }
 
   @Post(':id/payments') @RequirePermissions(P.PAYMENT_CREATE)

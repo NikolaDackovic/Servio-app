@@ -11,6 +11,17 @@ TEST_DATABASE_URL=postgresql://… npm test # druga test baza
 ```
 Integracioni testovi pre svakog fajla brišu šemu test baze, primenjuju **sve** SQL migracije i učitavaju demo seed, zatim pokreću pravi NestJS server i šalju HTTP zahteve. Nema mock-ova baze.
 
+## Rezultati — iteracija 3 (22.10.2026, Node 22.22, PostgreSQL 16, Linux)
+
+**58 / 58 prošlo** (44 ranijih + 14 novih u `test/e2e/checkout.e2e.spec.ts`), dva puzastopna pokretanja.
+
+Novi testovi: definisanje popusta (prava, opseg) · raspodela popusta po stavkama i PDV po stopama (20% i 10%) · nova stavka nasleđuje popust · izveštaj posle popusta · PIB/JMBG kontrolne cifre · kupac (PIB, diplomatska + opciono polje, brisanje) · mix sa kusurom + idempotentnost · mix preko duga ne upisuje ništa · reprezentacija samo za ceo račun i odvojeno u smeni/danu · ture sa nazivima · prebacivanje stavke na turu (ostaje poslata) i na drugi sto · spajanje tura (MERGED) i odbijanje ture sa naplatom · preimenovanje ture · storno celog računa.
+
+Greška pronađena testom i ispravljena: pogrešan test-vektor za JMBG u samom testu (kontrolna cifra ručno proverena).
+Greška pronađena pre testa: u migraciji 0002 CHECK `total = subtotal − popust` dodavao se pre popunjavanja `subtotal` za postojeće račune — redosled ispravljen i provereno nad bazom sa postojećim računima.
+
+UI (headless Chrome): otvaranje smene jednim dugmetom (dan + kasa), sto sa napomenom iz panela, dve ture, opcije stola, spajanje tura, naplata sa popustom 10%, PIB kupca i mix, pregled računa uz PIN konobara sa istorijom. Bez grešaka u konzoli.
+
 ## Rezultati — iteracija 2 (22.10.2026, Node 22.22, PostgreSQL 16, Linux)
 
 **44 / 44 prošlo** (29 iz iteracije 1 + 15 novih u `test/e2e/day-shift.e2e.spec.ts`). Na Windowsu sa PostgreSQL 18 korisnik je potvrdio 29/29 za iteraciju 1.

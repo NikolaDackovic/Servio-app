@@ -5,7 +5,7 @@ import { Specification } from './MyShift';
 
 const MONTHS = ['Januar', 'Februar', 'Mart', 'April', 'Maj', 'Jun', 'Jul', 'Avgust', 'Septembar', 'Oktobar', 'Novembar', 'Decembar'];
 const DOW = ['Pon', 'Uto', 'Sre', 'Čet', 'Pet', 'Sub', 'Ned'];
-const METHOD: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman' };
+const METHOD: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman', REPRESENTATION: 'Reprezentacija' };
 
 const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Belgrade' }).format(new Date()).slice(0, 7);
 function shift(month: string, delta: number) {
@@ -79,6 +79,7 @@ export function DayDetail({ dayId, onBack, onReceipts }: { dayId: string; onBack
         <div className="stat"><span>Broj računa</span><b>{s.sales.orders}</b></div>
         <div className="stat"><span>Naplaćeno</span><b>{fmt(s.payments.total)}</b></div>
         <div className="stat"><span>Storna</span><b>{s.voids.count} · {fmt(s.voids.amount)}</b></div>
+        <div className="stat"><span>Popusti</span><b>{s.discounts?.count ?? 0} · {fmt(s.discounts?.amount ?? '0.00')}</b></div>
       </div>
       <div className="grid2">
         <section className="card">

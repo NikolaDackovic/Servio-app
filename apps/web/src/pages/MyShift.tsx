@@ -3,7 +3,7 @@ import { api, fmt, time } from '../api';
 import { useAuth } from '../auth';
 import { Empty, ErrorBox, Modal, Spinner, useLoad, useToast } from '../ui';
 
-const METHOD: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman' };
+const METHOD: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman', REPRESENTATION: 'Reprezentacija' };
 
 /** Smena konobara: specifikacija pazara, prebacivanje otvorenih stolova, kraj smene. */
 export function MyShift({ onOpenOrder }: { onOpenOrder: (id: string) => void }) {
@@ -100,7 +100,7 @@ export function Specification({ summary: s, title }: { summary: any; title: stri
         <tbody>
           {s.collected.byMethod.length === 0 && <tr><td colSpan={3} className="muted">Nema naplata u ovoj smeni.</td></tr>}
           {s.collected.byMethod.map((m: any) => <tr key={m.method}><td>{METHOD[m.method] ?? m.method}</td><td className="num">{m.count}×</td><td className="num">{fmt(m.amount)}</td></tr>)}
-          <tr className="strong"><td>Ukupno naplaćeno</td><td /><td className="num">{fmt(s.collected.total)}</td></tr>
+          <tr className="strong"><td>Ukupno naplaćeno (novac)</td><td /><td className="num">{fmt(s.collected.total)}</td></tr>
         </tbody>
       </table>
       <div className="kv">
@@ -114,7 +114,7 @@ export function Specification({ summary: s, title }: { summary: any; title: stri
   );
 }
 
-function TransferDialog({ orderIds, onClose, onDone }: { orderIds: string[]; onClose: () => void; onDone: (n: number, name: string) => void }) {
+export function TransferDialog({ orderIds, onClose, onDone }: { orderIds: string[]; onClose: () => void; onDone: (n: number, name: string) => void }) {
   const { me } = useAuth();
   const list = useLoad(() => api<any[]>('GET', '/staff/waiters'), []);
   const [to, setTo] = useState('');

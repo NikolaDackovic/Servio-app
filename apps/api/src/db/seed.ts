@@ -84,6 +84,10 @@ export async function seed(databaseUrl: string, pinPepper: string) {
         const [p] = await tx.insert(s.products).values({ organizationId: org.id, categoryId: c.id, taxRateId: tax, code, name, price, sortOrder: i++ }).returning();
         await tx.insert(s.productPriceChanges).values({ productId: p.id, oldPrice: null, newPrice: price, userId: adminUser.id });
       }
+      let order = 0;
+      for (const [name, percent] of [['Popust 10%', '10'], ['Popust 20%', '20'], ['Popust 30%', '30'], ['Popust 40%', '40'], ['Loyalty 15%', '15']] as const) {
+        await tx.insert(s.discounts).values({ organizationId: org.id, name, percent, sortOrder: order++ });
+      }
       for (let t = 1; t <= 8; t++) {
         await tx.insert(s.diningTables).values({ locationId: loc.id, name: `Sto ${t}`, area: t <= 6 ? 'Sala' : 'Bašta', seats: 4, posX: ((t - 1) % 4) * 140, posY: Math.floor((t - 1) / 4) * 120 });
       }

@@ -29,6 +29,7 @@ export class TablesService {
       .select({
         id: orders.id, tableId: orders.tableId, number: orders.number, total: orders.total, paidTotal: orders.paidTotal,
         openedAt: orders.openedAt, waiterId: orders.waiterId, waiterName: users.fullName, guests: orders.guests,
+        tabName: orders.tabName,
       })
       .from(orders).innerJoin(users, eq(users.id, orders.waiterId))
       .where(and(eq(orders.locationId, u.locationId), eq(orders.status, 'OPEN'), sql`${orders.tableId} IS NOT NULL`))

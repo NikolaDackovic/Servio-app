@@ -10,6 +10,8 @@ export const P = {
   ORDER_VOID: 'order.void', // storniranje poslatih stavki
   ORDER_TRANSFER: 'order.transfer', // promena konobara/stola
   PAYMENT_CREATE: 'payment.create',
+  ORDER_DISCOUNT: 'order.discount', // primena popusta na računu
+  DISCOUNT_MANAGE: 'discount.manage', // definisanje popusta (ADMIN)
   SHIFT_MANAGE: 'shift.manage',
   DAY_MANAGE: 'day.manage', // otvaranje i zaključak poslovnog dana
   REPORT_READ: 'report.read',
@@ -27,15 +29,15 @@ export const DEFAULT_ROLES: { code: string; name: string; permissions: Permissio
   {
     code: 'MANAGER', name: 'Menadžer',
     permissions: [P.CATALOG_READ, P.CATALOG_WRITE, P.TABLE_READ, P.TABLE_WRITE, P.ORDER_READ, P.ORDER_READ_ALL,
-      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ],
+      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.DISCOUNT_MANAGE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ],
   },
   {
     code: 'CASHIER', name: 'Kasir',
-    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.ORDER_WRITE, P.PAYMENT_CREATE, P.SHIFT_MANAGE, P.DAY_MANAGE],
+    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.ORDER_WRITE, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.SHIFT_MANAGE, P.DAY_MANAGE],
   },
   {
     code: 'WAITER', name: 'Konobar',
-    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_WRITE, P.PAYMENT_CREATE],
+    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_WRITE, P.PAYMENT_CREATE, P.ORDER_DISCOUNT],
   },
   { code: 'KITCHEN', name: 'Kuhinja', permissions: [P.CATALOG_READ, P.ORDER_READ, P.ORDER_READ_ALL] },
 ];

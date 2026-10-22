@@ -3,7 +3,7 @@ import { api, fmt, fmtQty } from '../api';
 import { Empty, ErrorBox, Spinner, useLoad } from '../ui';
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Belgrade' }).format(new Date());
-const METHOD: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman' };
+const METHOD: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman', REPRESENTATION: 'Reprezentacija' };
 
 export function Report() {
   const [from, setFrom] = useState(today());
@@ -27,6 +27,8 @@ export function Report() {
             <div className="stat"><span>Prosečan račun</span><b>{fmt(d.sales.averageOrder)}</b></div>
             <div className="stat"><span>Naplaćeno u periodu</span><b>{fmt(d.payments.total)}</b></div>
             <div className="stat"><span>Storna</span><b>{d.voids.count} · {fmt(d.voids.amount)}</b></div>
+            <div className="stat"><span>Popusti</span><b>{d.discounts?.count ?? 0} · {fmt(d.discounts?.amount ?? '0.00')}</b></div>
+            {d.payments.representation && d.payments.representation !== '0.00' && <div className="stat"><span>Reprezentacija</span><b>{fmt(d.payments.representation)}</b></div>}
             <div className="stat"><span>Otvoreni računi sada</span><b>{d.openOrdersNow.count} · {fmt(d.openOrdersNow.total)}</b></div>
           </div>
           <div className="grid2">

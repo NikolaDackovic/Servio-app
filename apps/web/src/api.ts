@@ -19,9 +19,13 @@ export const storage = {
 let onUnauthorized: () => void = () => {};
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
-export async function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * Poziv API-ja. `token` (opciono) koristi drugi nalog samo za ovaj poziv — npr. pregled računa
+ * uz PIN drugog konobara, bez odjave prijavljenog korisnika.
+ */
+export async function api<T = any>(method: string, path: string, body?: unknown, token?: string): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const t = storage.token;
+  const t = token ?? storage.token;
   if (t) headers.Authorization = `Bearer ${t}`;
   let res: Response;
   try {
@@ -39,7 +43,7 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
       throw new ApiError(res.status, 'API_UNREACHABLE',
         'POS API server nije dostupan. Proverite da li je pokrenut (npm run dev:api) i da li radi baza podataka.');
     }
-    if (res.status === 401 && path !== '/auth/pin' && path !== '/auth/login') onUnauthorized();
+    if (res.status === 401 && !token && path !== '/auth/pin' && path !== '/auth/login') onUnauthorized();
     throw new ApiError(res.status, e.code ?? 'HTTP_ERROR', e.message ?? `Greška ${res.status}`, e.details, e.requestId);
   }
   return data as T;
@@ -105,11 +109,17 @@ export interface Me {
 }
 export interface Product { id: string; code: string; name: string; unit: string; price: string; color: string | null; categoryId: string; taxLabel: string; taxRate: string; active: boolean; taxRateId: string; barcode: string | null }
 export interface Category { id: string; name: string; color: string | null; sortOrder: number; active: boolean }
-export interface OrderItem { id: string; productId: string; name: string; unitPrice: string; quantity: string; lineTotal: string; note: string | null; status: 'NEW' | 'SENT' | 'VOIDED'; sendBatch: number | null; voidReason: string | null; taxLabel: string }
+export interface OrderItem { id: string; productId: string; name: string; unitPrice: string; quantity: string; lineTotal: string; discountAmount: string; note: string | null; status: 'NEW' | 'SENT' | 'VOIDED'; sendBatch: number | null; voidReason: string | null; taxLabel: string }
+export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'REPRESENTATION';
+export const METHOD_LABEL: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman', REPRESENTATION: 'Reprezentacija' };
 export interface Payment { id: string; method: string; amount: string; tendered: string | null; change: string; mode: string; createdAt: string }
 export interface Order {
-  id: string; number: number; status: 'OPEN' | 'PAID' | 'CANCELLED'; total: string; paidTotal: string; remaining: string;
+  id: string; number: number; status: 'OPEN' | 'PAID' | 'CANCELLED' | 'MERGED'; total: string; paidTotal: string; remaining: string;
+  subtotal: string; discountTotal: string; discountPercent: string; discountId: string | null; tabName: string | null; waiterId: string;
+  buyerIdType: string | null; buyerId: string | null; buyerIdLabel: string | null; buyerOptionalBasis: string | null; buyerOptionalValue: string | null;
   tableId: string | null; tableName: string | null; waiterName: string; version: number; openedAt: string; closedAt: string | null;
   items: OrderItem[]; payments: Payment[]; taxSummary: { label: string; rate: string; gross: string; tax: string; net: string }[];
 }
-export interface Table { id: string; name: string; area: string; seats: number; posX: number; posY: number; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string }[] }
+export interface Table { id: string; name: string; area: string; seats: number; posX: number; posY: number; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string; waiterId: string; tabName: string | null }[] }
+
+export interface Discount { id: string; name: string; percent: string; active: boolean; sortOrder: number }

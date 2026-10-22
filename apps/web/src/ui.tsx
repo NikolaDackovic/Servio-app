@@ -20,6 +20,15 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="state empty">{children}</div>;
 }
 
+/** Globalno "Osveži" na kasi: komponente koje ga koriste ponovo učitavaju podatke (npr. nove artikle iz ADMIN-a). */
+const RefreshCtx = createContext<{ key: number; bump: () => void }>({ key: 0, bump: () => {} });
+export const useRefresh = () => useContext(RefreshCtx);
+export function RefreshProvider({ children }: { children: ReactNode }) {
+  const [key, setKey] = useState(0);
+  const bump = useCallback(() => setKey((k) => k + 1), []);
+  return <RefreshCtx.Provider value={{ key, bump }}>{children}</RefreshCtx.Provider>;
+}
+
 /** Učitavanje podataka sa stvarnim loading / error / data stanjima. */
 export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const [data, setData] = useState<T | undefined>();
@@ -55,7 +64,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide, full }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; full?: boolean }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', h);
@@ -63,7 +72,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
   }, [onClose]);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`modal ${wide ? 'wide' : ''} ${full ? 'full' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <header><h2>{title}</h2><button className="btn ghost sm" onClick={onClose} aria-label="Zatvori">✕</button></header>
         {children}
       </div>

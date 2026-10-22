@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { addMoney, api, fmt, newIdempotencyKey, Table, time } from '../api';
 import { useAuth } from '../auth';
-import { Empty, ErrorBox, Modal, Spinner, useLoad, useToast } from '../ui';
+import { Empty, ErrorBox, Spinner, useLoad, useRefresh, useToast } from '../ui';
 
 const STATUS: Record<Table['status'], string> = { FREE: 'Slobodan', OCCUPIED: 'Zauzet', PARTIALLY_PAID: 'Delimično plaćen' };
 const TILE_W = 120;
@@ -15,11 +15,11 @@ function minutesSince(iso: string) {
 export function Tables({ onOpenOrder, onGoToDay }: { onOpenOrder: (id: string) => void; onGoToDay: () => void }) {
   const toast = useToast();
   const { me } = useAuth();
-  const day = useLoad(() => api('GET', '/business-days/current'), []);
-  const { data, error, loading, reload } = useLoad(() => api<Table[]>('GET', '/tables'), []);
+  const { key } = useRefresh();
+  const day = useLoad(() => api('GET', '/business-days/current'), [key]);
+  const { data, error, loading, reload } = useLoad(() => api<Table[]>('GET', '/tables'), [key]);
   const [area, setArea] = useState<string>('');
   const [busy, setBusy] = useState<string | null>(null);
-  const [chooser, setChooser] = useState<Table | null>(null);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 30_000); return () => clearInterval(t); }, []);
   useEffect(() => { const t = setInterval(reload, 15_000); return () => clearInterval(t); }, [reload]);
@@ -35,11 +35,19 @@ export function Tables({ onOpenOrder, onGoToDay }: { onOpenOrder: (id: string) =
     try { onOpenOrder((await api('POST', '/orders', { tableId: t.id, idempotencyKey: newIdempotencyKey('open') })).id); }
     catch (e: any) { toast('err', e.message); } finally { setBusy(null); }
   };
-  const open = (t: Table) => {
-    if (t.openOrders.length === 1) return onOpenOrder(t.openOrders[0].id);
-    if (t.openOrders.length > 1) return; // izbor računa je ispod stola
-    openNew(t);
-  };
+  // Sto sa računima otvara prvu turu (ostale ture su tabovi u ekranu stola); prazan sto otvara novi račun.
+  const open = (t: Table) => (t.openOrders.length ? onOpenOrder(t.openOrders[0].id) : openNew(t));
+
+  // Mapa se skalira tako da popuni ceo raspoloživi prostor.
+  const floorRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = floorRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setBox({ w: e.contentRect.width, h: e.contentRect.height }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
 
   if (loading && !data) return <Spinner />;
   if (error) return <ErrorBox error={error} onRetry={reload} />;
@@ -47,11 +55,13 @@ export function Tables({ onOpenOrder, onGoToDay }: { onOpenOrder: (id: string) =
 
   const dayOpen = !!day.data?.day;
   const inArea = current === '__list' ? sorted : sorted.filter((t) => t.area === current);
-  const maxX = Math.max(...inArea.map((t) => t.posX)) + TILE_W + 24;
-  const maxY = Math.max(...inArea.map((t) => t.posY)) + TILE_H + 60;
+  const maxX = Math.max(...inArea.map((t) => t.posX)) + TILE_W + 32;
+  const maxY = Math.max(...inArea.map((t) => t.posY)) + TILE_H + 32;
+  const scale = box.w && box.h ? Math.max(0.6, Math.min(box.w / maxX, box.h / maxY, 2.6)) : 1;
+  const offX = Math.max(0, (box.w - maxX * scale) / 2);
 
   return (
-    <div className="page wide">
+    <div className="floor-page">
       {day.data && !dayOpen && (
         <div className="notice warn row-between">
           <span><strong>Poslovni dan nije otvoren.</strong> Računi i naplata nisu mogući dok se dan ne otvori.</span>
@@ -78,21 +88,21 @@ export function Tables({ onOpenOrder, onGoToDay }: { onOpenOrder: (id: string) =
           </tbody>
         </table>
       ) : (
-        <div className="floor" style={{ minHeight: maxY, minWidth: Math.min(maxX, 2000) }}>
+        <div className="floor" ref={floorRef}>
           {inArea.map((t) => {
             const total = addMoney('0.00', ...t.openOrders.map((o) => o.total));
             const since = t.openOrders[0]?.openedAt;
             return (
-              <div key={t.id} className={`floor-table ${t.status.toLowerCase()}`} style={{ left: t.posX, top: t.posY, width: TILE_W }}>
-                <button className="floor-main" style={{ height: TILE_H }} disabled={busy === t.id || !dayOpen}
-                  onClick={() => (t.openOrders.length > 1 ? setChooser(t) : open(t))} aria-label={`${t.name}, ${STATUS[t.status]}`}>
+              <div key={t.id} className={`floor-table ${t.status.toLowerCase()}`}
+                style={{ left: offX + (t.posX + 16) * scale, top: (t.posY + 16) * scale, width: TILE_W * scale, ['--s' as any]: scale }}>
+                <button className="floor-main" style={{ height: TILE_H * scale }} disabled={busy === t.id || !dayOpen}
+                  onClick={() => open(t)} aria-label={`${t.name}, ${STATUS[t.status]}`}>
                   <span className="ft-name">{t.name.replace(/^Sto\s*/, '')}</span>
                   {t.openOrders.length > 0 ? (
                     <>
                       <span className="ft-total">{fmt(total)}</span>
-                      <span className="ft-meta">
-                        {t.openOrders.length > 1 ? `${t.openOrders.length} računa` : t.openOrders[0].waiterName.split(' ')[0]} · {minutesSince(since!)}′
-                      </span>
+                      <span className="ft-owner">{[...new Set(t.openOrders.map((o) => o.waiterName))].join(', ')}</span>
+                      <span className="ft-meta">{t.openOrders.length > 1 ? `${t.openOrders.length} ture · ` : ''}{minutesSince(since!)} min</span>
                     </>
                   ) : <span className="ft-meta">{t.seats} mesta</span>}
                 </button>
@@ -103,22 +113,6 @@ export function Tables({ onOpenOrder, onGoToDay }: { onOpenOrder: (id: string) =
             );
           })}
         </div>
-      )}
-      {chooser && (
-        <Modal title={`${chooser.name} — otvoreni računi`} onClose={() => setChooser(null)}>
-          <div className="pick-list">
-            {chooser.openOrders.map((o) => (
-              <button key={o.id} className="pick" onClick={() => { setChooser(null); onOpenOrder(o.id); }}>
-                <span className="pick-main"><strong>#{o.number}</strong> · {o.waiterName} · od {time(o.openedAt)}</span>
-                <span className="num">{fmt(o.total)}</span>
-              </button>
-            ))}
-          </div>
-          <div className="modal-actions">
-            <button className="btn" onClick={() => setChooser(null)}>Zatvori</button>
-            <button className="btn primary" onClick={() => { const t = chooser; setChooser(null); openNew(t); }}>+ Novi račun</button>
-          </div>
-        </Modal>
       )}
     </div>
   );

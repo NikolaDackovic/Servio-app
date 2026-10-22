@@ -5,8 +5,9 @@ import { Calendar, DayDetail } from '@shared/pages/Calendar';
 import { Report } from '@shared/pages/Report';
 import { Products } from '@shared/pages/Products';
 import { Orders } from '@shared/pages/Orders';
+import { Discounts } from './Discounts';
 
-type View = 'calendar' | 'report' | 'receipts' | 'products';
+type View = 'calendar' | 'report' | 'receipts' | 'products' | 'discounts';
 
 /**
  * ADMIN / Backoffice — odvojena aplikacija (poseban port), samo za administraciju:
@@ -28,6 +29,7 @@ export function AdminApp() {
     { id: 'receipts', label: 'Računi', group: 'Poslovanje', show: can('order.read_all') },
     { id: 'report', label: 'Izveštaj prometa', group: 'Poslovanje', show: can('report.read') },
     { id: 'products', label: 'Artikli i cene', group: 'Šifarnici', show: can('catalog.write') },
+    { id: 'discounts', label: 'Popusti', group: 'Šifarnici', show: can('discount.manage') },
   ];
   const items = all.filter((i) => i.show);
 
@@ -74,6 +76,7 @@ export function AdminApp() {
         ) : current === 'calendar' ? <Calendar onShowDay={setDayDetail} />
           : current === 'receipts' ? <Orders key={receiptsDay ?? 'all'} readOnly businessDayId={receiptsDay} onClearDay={() => setReceiptsDay(null)} />
           : current === 'report' ? <Report />
+          : current === 'discounts' ? <Discounts />
           : <Products />}
       </main>
     </div>

@@ -2,18 +2,19 @@ import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, ne, sql, SQL } from 'drizzle-orm';
 import { DB, Db, Tx } from '../../db/db.module';
 import {
-  auditLogs, diningTables, documentCounters, orderItems, orders, payments, products, roles, taxRates, users,
+  auditLogs, diningTables, discounts, documentCounters, orderItems, orders, payments, products, roles, taxRates, users,
 } from '../../db/schema';
 import { AuthUser } from '../../common/auth-context';
 import { P } from '../../common/permissions';
 import { audit } from '../../common/audit';
+import { BUYER_ID_TYPES, validateBuyer } from '../../common/buyer';
 import { Conflict, Invalid, NotFound } from '../../common/errors';
 import { dec, lineTotal, money, qty, sum } from '../../common/money';
 import { findOpenShift, requireDevice } from '../shifts/shifts';
 import { ensureStaffShift, requireOpenDay } from '../day/day.helpers';
 import {
-  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, TransferOrdersDto, UpdateItemDto,
-  VoidItemDto, VersionDto,
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto,
+  RenameOrderDto, SetBuyerDto, SetDiscountDto, SettleDto, TransferOrdersDto, UpdateItemDto, VoidItemDto, VersionDto,
 } from './orders.dto';
 
 type OrderRow = typeof orders.$inferSelect;
@@ -47,18 +48,29 @@ export class OrdersService {
     return o;
   }
 
-  /** Preračunava ukupan iznos iz stavki u bazi (izvor istine) i povećava verziju. */
-  private async recompute(tx: Tx, o: OrderRow) {
-    const rows = await tx.select({ lineTotal: orderItems.lineTotal }).from(orderItems)
+  /**
+   * Preračunava iznose iz stavki u bazi (izvor istine) i povećava verziju.
+   * Popust računa (procenat) se raspoređuje po stavkama: popust stavke = round2(iznos × % / 100),
+   * da bi PDV rekapitulacija po stopama bila tačna. total = subtotal − zbir popusta.
+   */
+  private async recompute(tx: Tx, o: OrderRow, discountPercent: string = o.discountPercent) {
+    await tx.execute(sql`
+      UPDATE order_items SET discount_amount =
+        CASE WHEN status = 'VOIDED' THEN 0 ELSE round(line_total * ${discountPercent}::numeric / 100, 2) END
+      WHERE order_id = ${o.id}`);
+    const rows = await tx.select({ lineTotal: orderItems.lineTotal, discount: orderItems.discountAmount }).from(orderItems)
       .where(and(eq(orderItems.orderId, o.id), ne(orderItems.status, 'VOIDED')));
-    const total = sum(rows.map((r) => r.lineTotal));
+    const subtotal = sum(rows.map((r) => r.lineTotal));
+    const discountTotal = sum(rows.map((r) => r.discount));
+    const total = subtotal.sub(discountTotal);
     if (total.lt(dec(o.paidTotal))) {
       throw Conflict('TOTAL_BELOW_PAID',
         'Izmena bi smanjila račun ispod već naplaćenog iznosa. Povraćaj novca još nije podržan.',
         { newTotal: money(total), paidTotal: o.paidTotal });
     }
     const [updated] = await tx.update(orders)
-      .set({ total: money(total), version: o.version + 1, updatedAt: new Date() })
+      .set({ subtotal: money(subtotal), discountTotal: money(discountTotal), total: money(total),
+        discountPercent, version: o.version + 1, updatedAt: new Date() })
       .where(eq(orders.id, o.id)).returning();
     return updated;
   }
@@ -92,7 +104,7 @@ export class OrdersService {
     for (const i of active) {
       const k = i.taxLabel;
       const t = taxes.get(k) ?? { label: k, rate: i.taxRate, base: dec(0), gross: dec(0) };
-      t.gross = t.gross.add(dec(i.lineTotal));
+      t.gross = t.gross.add(dec(i.lineTotal).sub(dec(i.discountAmount)));
       taxes.set(k, t);
     }
     const taxSummary = [...taxes.values()].map((t) => {
@@ -105,6 +117,7 @@ export class OrdersService {
       ...o.order,
       waiterName: o.waiterName,
       tableName: o.tableName,
+      buyerIdLabel: o.order.buyerIdType ? BUYER_ID_TYPES.find((t) => t.code === o.order.buyerIdType)?.label ?? o.order.buyerIdType : null,
       remaining: money(dec(o.order.total).sub(dec(o.order.paidTotal))),
       items,
       payments: pays,
@@ -126,7 +139,8 @@ export class OrdersService {
         id: orders.id, number: orders.number, status: orders.status, total: orders.total, paidTotal: orders.paidTotal,
         tableId: orders.tableId, tableName: diningTables.name, waiterId: orders.waiterId, waiterName: users.fullName,
         openedAt: orders.openedAt, closedAt: orders.closedAt, version: orders.version, businessDayId: orders.businessDayId,
-        guests: orders.guests,
+        guests: orders.guests, tabName: orders.tabName, subtotal: orders.subtotal, discountTotal: orders.discountTotal,
+        buyerIdType: orders.buyerIdType, buyerId: orders.buyerId,
       })
       .from(orders).innerJoin(users, eq(users.id, orders.waiterId))
       .leftJoin(diningTables, eq(diningTables.id, orders.tableId))
@@ -142,22 +156,28 @@ export class OrdersService {
           .where(and(eq(orders.locationId, u.locationId), eq(orders.idempotencyKey, dto.idempotencyKey)));
         if (dup) return { ...(await this.get(u, dup.id, tx)), idempotentReplay: true };
       }
-      if (dto.tableId) {
-        const [t] = await tx.select({ id: diningTables.id }).from(diningTables)
-          .where(and(eq(diningTables.id, dto.tableId), eq(diningTables.locationId, u.locationId), eq(diningTables.active, true)));
-        if (!t) throw Invalid('INVALID_TABLE', 'Sto ne postoji u ovom lokalu');
-      }
-      const day = await requireOpenDay(tx, u);
-      await ensureStaffShift(tx, u, day.id);
-      const number = await this.nextNumber(tx, u.locationId, 'ORDER');
-      const [o] = await tx.insert(orders).values({
-        locationId: u.locationId, deviceId: u.deviceId, tableId: dto.tableId ?? null, number, businessDayId: day.id,
-        guests: dto.guests ?? null, note: dto.note ?? null, openedById: u.userId, waiterId: u.userId,
-        idempotencyKey: dto.idempotencyKey ?? null,
-      }).returning();
-      await audit(tx, u, 'order.open', 'order', o.id, { number, tableId: o.tableId });
+      const o = await this.createInTx(tx, u, dto);
       return this.get(u, o.id, tx);
     });
+  }
+
+  /** Otvaranje računa unutar postojeće transakcije (koristi se i za novu turu pri prebacivanju stavki). */
+  private async createInTx(tx: Tx, u: AuthUser, dto: { tableId?: string; guests?: number; note?: string; tabName?: string; idempotencyKey?: string }) {
+    if (dto.tableId) {
+      const [t] = await tx.select({ id: diningTables.id }).from(diningTables)
+        .where(and(eq(diningTables.id, dto.tableId), eq(diningTables.locationId, u.locationId), eq(diningTables.active, true)));
+      if (!t) throw Invalid('INVALID_TABLE', 'Sto ne postoji u ovom lokalu');
+    }
+    const day = await requireOpenDay(tx, u);
+    await ensureStaffShift(tx, u, day.id);
+    const number = await this.nextNumber(tx, u.locationId, 'ORDER');
+    const [o] = await tx.insert(orders).values({
+      locationId: u.locationId, deviceId: u.deviceId, tableId: dto.tableId ?? null, number, businessDayId: day.id,
+      guests: dto.guests ?? null, note: dto.note ?? null, tabName: dto.tabName?.trim() || null,
+      openedById: u.userId, waiterId: u.userId, idempotencyKey: dto.idempotencyKey ?? null,
+    }).returning();
+    await audit(tx, u, 'order.open', 'order', o.id, { number, tableId: o.tableId, tabName: o.tabName });
+    return o;
   }
 
   async addItem(u: AuthUser, orderId: string, dto: AddItemDto) {
@@ -272,7 +292,7 @@ export class OrdersService {
       if (c > 0) throw Conflict('ORDER_HAS_SENT_ITEMS', 'Porudžbina ima poslate stavke — prvo ih stornirajte');
       await tx.delete(orderItems).where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'NEW')));
       await tx.update(orders).set({
-        status: 'CANCELLED', total: '0.00', closedAt: new Date(), closedById: u.userId, version: o.version + 1, updatedAt: new Date(),
+        status: 'CANCELLED', subtotal: '0.00', discountTotal: '0.00', total: '0.00', closedAt: new Date(), closedById: u.userId, version: o.version + 1, updatedAt: new Date(),
       }).where(eq(orders.id, o.id));
       await audit(tx, u, 'order.cancel', 'order', o.id, { reason: dto.reason });
       return this.get(u, o.id, tx);
@@ -289,15 +309,30 @@ export class OrdersService {
    *  - Račun prelazi u PAID tek kada zbir naplata tačno pokrije iznos.
    */
   async pay(u: AuthUser, orderId: string, dto: CreatePaymentDto) {
+    const r = await this.settle(u, orderId, {
+      parts: [{ method: dto.method, amount: dto.amount, tendered: dto.tendered }],
+      idempotencyKey: dto.idempotencyKey, expectedVersion: dto.expectedVersion,
+    });
+    return { payment: r.payments[0], idempotentReplay: r.idempotentReplay, order: r.order };
+  }
+
+  /**
+   * Naplata u jednom ili više delova (npr. "mix": deo karticom, ostatak gotovinom) — sve u jednoj transakciji:
+   * ili su evidentirani svi delovi, ili nijedan. Ključ dela = idempotencyKey (jedan deo) ili idempotencyKey#i.
+   * Reprezentacija: samo kao jedini način, za ceo račun i bez prethodnih naplata.
+   */
+  async settle(u: AuthUser, orderId: string, dto: SettleDto) {
     requireDevice(u);
+    if (!dto.parts.length) throw Invalid('NO_PAYMENT_PARTS', 'Nije naveden nijedan način plaćanja');
+    const keyOf = (i: number) => (dto.parts.length === 1 ? dto.idempotencyKey : `${dto.idempotencyKey}#${i}`);
     return this.db.transaction(async (tx) => {
       const o = await this.lockOrder(tx, u, orderId, { requireOpen: false });
 
-      const [existing] = await tx.select().from(payments)
-        .where(and(eq(payments.orderId, o.id), eq(payments.idempotencyKey, dto.idempotencyKey)));
-      if (existing) {
-        return { payment: existing, idempotentReplay: true, order: await this.get(u, o.id, tx) };
-      }
+      const replay = await tx.select().from(payments)
+        .where(and(eq(payments.orderId, o.id), inArray(payments.idempotencyKey, dto.parts.map((_, i) => keyOf(i)))))
+        .orderBy(asc(payments.createdAt));
+      if (replay.length) return { payments: replay, idempotentReplay: true, order: await this.get(u, o.id, tx) };
+
       if (o.status !== 'OPEN') throw Conflict('ORDER_NOT_OPEN', `Porudžbina je u statusu ${o.status}`);
       if (dto.expectedVersion !== undefined && dto.expectedVersion !== o.version) {
         throw Conflict('STALE_ORDER', 'Porudžbinu je u međuvremenu izmenio neko drugi. Osvežite prikaz.');
@@ -309,38 +344,50 @@ export class OrdersService {
       const staffShift = await ensureStaffShift(tx, u, day.id);
 
       const total = dec(o.total);
-      const paid = dec(o.paidTotal);
-      const remaining = total.sub(paid);
+      let paid = dec(o.paidTotal);
       if (total.lte(0)) throw Conflict('ORDER_EMPTY', 'Račun nema stavki za naplatu');
 
-      const amount = dto.amount !== undefined ? dec(dto.amount) : remaining;
-      if (amount.lte(0)) throw Invalid('INVALID_AMOUNT', 'Iznos naplate mora biti veći od nule');
-      if (amount.gt(remaining)) {
-        throw Invalid('AMOUNT_EXCEEDS_REMAINING', 'Iznos naplate je veći od preostalog duga', {
-          remaining: money(remaining), amount: money(amount),
+      if (dto.parts.some((p) => p.method === 'REPRESENTATION')) {
+        if (dto.parts.length > 1 || !paid.isZero() || (dto.parts[0].amount !== undefined && !dec(dto.parts[0].amount).eq(total))) {
+          throw Invalid('REPRESENTATION_WHOLE_ONLY', 'Reprezentacija se evidentira samo za ceo račun, bez drugih načina plaćanja');
+        }
+      }
+
+      const created = [];
+      for (let i = 0; i < dto.parts.length; i++) {
+        const part = dto.parts[i];
+        const remaining = total.sub(paid);
+        const amount = part.amount !== undefined ? dec(part.amount) : remaining;
+        if (amount.lte(0)) throw Invalid('INVALID_AMOUNT', 'Iznos naplate mora biti veći od nule');
+        if (amount.gt(remaining)) {
+          throw Invalid('AMOUNT_EXCEEDS_REMAINING', 'Iznos naplate je veći od preostalog duga', {
+            remaining: money(remaining), amount: money(amount),
+          });
+        }
+        let tendered: string | null = null;
+        let change = dec(0);
+        if (part.tendered !== undefined) {
+          if (part.method !== 'CASH') throw Invalid('TENDERED_ONLY_CASH', 'Primljeni iznos i kusur važe samo za gotovinu');
+          const t = dec(part.tendered);
+          if (t.lt(amount)) throw Invalid('TENDERED_TOO_LOW', 'Primljeni iznos je manji od iznosa naplate');
+          tendered = money(t);
+          change = t.sub(amount);
+        }
+        const [payment] = await tx.insert(payments).values({
+          orderId: o.id, shiftId: shift.id, businessDayId: day.id, staffShiftId: staffShift.id,
+          deviceId: u.deviceId, method: part.method, mode: 'TEST',
+          amount: money(amount), tendered, change: money(change), idempotencyKey: keyOf(i), createdById: u.userId,
+        }).returning();
+        created.push(payment);
+        paid = paid.add(amount);
+        await audit(tx, u, 'payment.create', 'order', o.id, {
+          paymentId: payment.id, method: payment.method, amount: payment.amount, mode: 'TEST',
         });
       }
 
-      let tendered: string | null = null;
-      let change = dec(0);
-      if (dto.tendered !== undefined) {
-        if (dto.method !== 'CASH') throw Invalid('TENDERED_ONLY_CASH', 'Primljeni iznos i kusur važe samo za gotovinu');
-        const t = dec(dto.tendered);
-        if (t.lt(amount)) throw Invalid('TENDERED_TOO_LOW', 'Primljeni iznos je manji od iznosa naplate');
-        tendered = money(t);
-        change = t.sub(amount);
-      }
-
-      const [payment] = await tx.insert(payments).values({
-        orderId: o.id, shiftId: shift.id, businessDayId: day.id, staffShiftId: staffShift.id,
-        deviceId: u.deviceId, method: dto.method, mode: 'TEST',
-        amount: money(amount), tendered, change: money(change), idempotencyKey: dto.idempotencyKey, createdById: u.userId,
-      }).returning();
-
-      const newPaid = paid.add(amount);
-      const settled = newPaid.eq(total);
+      const settled = paid.eq(total);
       await tx.update(orders).set({
-        paidTotal: money(newPaid),
+        paidTotal: money(paid),
         status: settled ? 'PAID' : 'OPEN',
         closedAt: settled ? new Date() : null,
         closedById: settled ? u.userId : null,
@@ -348,13 +395,169 @@ export class OrdersService {
         version: o.version + 1,
         updatedAt: new Date(),
       }).where(eq(orders.id, o.id));
-
-      await audit(tx, u, 'payment.create', 'order', o.id, {
-        paymentId: payment.id, method: payment.method, amount: payment.amount, mode: 'TEST', settled,
-      });
       if (settled) await audit(tx, u, 'order.close', 'order', o.id, { total: o.total });
 
-      return { payment, idempotentReplay: false, order: await this.get(u, o.id, tx) };
+      return { payments: created, idempotentReplay: false, order: await this.get(u, o.id, tx) };
+    });
+  }
+
+  // ---------- popust i kupac ----------
+
+  /** Primena popusta (definisanog u ADMIN-u) na ceo račun; discountId = null uklanja popust. */
+  async setDiscount(u: AuthUser, orderId: string, dto: SetDiscountDto) {
+    return this.db.transaction(async (tx) => {
+      const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
+      let percent = '0';
+      let name: string | null = null;
+      if (dto.discountId) {
+        const [d] = await tx.select().from(discounts)
+          .where(and(eq(discounts.id, dto.discountId), eq(discounts.organizationId, u.organizationId), eq(discounts.active, true)));
+        if (!d) throw Invalid('INVALID_DISCOUNT', 'Popust ne postoji ili nije aktivan');
+        percent = d.percent; name = d.name;
+      }
+      await tx.update(orders).set({ discountId: dto.discountId ?? null }).where(eq(orders.id, o.id));
+      await this.recompute(tx, o, percent);
+      await audit(tx, u, dto.discountId ? 'order.discount.set' : 'order.discount.remove', 'order', o.id, { name, percent });
+      return this.get(u, o.id, tx);
+    });
+  }
+
+  /** Identifikacija kupca na računu (npr. PIB za gotovinski račun firmi); null briše. */
+  async setBuyer(u: AuthUser, orderId: string, dto: SetBuyerDto) {
+    return this.db.transaction(async (tx) => {
+      const o = await this.lockOrder(tx, u, orderId);
+      if (!dto.idType) {
+        await tx.update(orders).set({ buyerIdType: null, buyerId: null, buyerOptionalBasis: null, buyerOptionalValue: null,
+          version: o.version + 1, updatedAt: new Date() }).where(eq(orders.id, o.id));
+        await audit(tx, u, 'order.buyer.remove', 'order', o.id);
+        return this.get(u, o.id, tx);
+      }
+      const value = validateBuyer(dto.idType, dto.idValue ?? '');
+      if (!!dto.optionalBasis !== !!dto.optionalValue) {
+        throw Invalid('INVALID_BUYER_OPTIONAL', 'Opciono polje kupca: navedite i osnov i broj (ili ni jedno)');
+      }
+      await tx.update(orders).set({
+        buyerIdType: dto.idType, buyerId: value,
+        buyerOptionalBasis: dto.optionalBasis ?? null, buyerOptionalValue: dto.optionalValue?.trim() ?? null,
+        version: o.version + 1, updatedAt: new Date(),
+      }).where(eq(orders.id, o.id));
+      await audit(tx, u, 'order.buyer.set', 'order', o.id, { idType: dto.idType, idValue: value, optional: dto.optionalBasis ?? null });
+      return this.get(u, o.id, tx);
+    });
+  }
+
+  // ---------- ture, prebacivanje stavki, spajanje, storno računa ----------
+
+  async rename(u: AuthUser, orderId: string, dto: RenameOrderDto) {
+    return this.db.transaction(async (tx) => {
+      const o = await this.lockOrder(tx, u, orderId);
+      await tx.update(orders).set({ tabName: dto.tabName?.trim() || null, version: o.version + 1, updatedAt: new Date() })
+        .where(eq(orders.id, o.id));
+      await audit(tx, u, 'order.rename', 'order', o.id, { tabName: dto.tabName ?? null });
+      return this.get(u, o.id, tx);
+    });
+  }
+
+  /**
+   * Prebacivanje izabranih stavki na drugi račun (postojeću turu, ili novu turu/sto).
+   * Stavke zadržavaju status (poslate ostaju poslate — ne idu ponovo u pripremu) i snimak cene.
+   * Zaključavanje oba računa u stalnom redosledu (po id) sprečava deadlock.
+   */
+  async moveItems(u: AuthUser, orderId: string, dto: MoveItemsDto) {
+    if (!dto.toOrderId && !dto.toTableId && dto.toTabName === undefined) {
+      throw Invalid('MOVE_TARGET_REQUIRED', 'Izaberite odredište: postojeći račun, sto ili novu turu');
+    }
+    return this.db.transaction(async (tx) => {
+      let targetId = dto.toOrderId ?? null;
+      if (!targetId) {
+        // nova tura: na izabranom stolu, ili na istom stolu kao izvor
+        const [src] = await tx.select({ tableId: orders.tableId }).from(orders)
+          .where(and(eq(orders.id, orderId), eq(orders.locationId, u.locationId)));
+        if (!src) throw NotFound('Porudžbina');
+        const created = await this.createInTx(tx, u, { tableId: dto.toTableId ?? src.tableId ?? undefined, tabName: dto.toTabName });
+        targetId = created.id;
+      }
+      if (targetId === orderId) throw Invalid('MOVE_SAME_ORDER', 'Izvor i odredište su isti račun');
+      const [first, second] = [orderId, targetId].sort();
+      const locked: Record<string, OrderRow> = {};
+      for (const id of [first, second]) locked[id] = await this.lockOrder(tx, u, id);
+      const src = locked[orderId];
+      const dst = locked[targetId];
+
+      const items = await tx.select().from(orderItems)
+        .where(and(eq(orderItems.orderId, src.id), inArray(orderItems.id, dto.itemIds)));
+      if (items.length !== new Set(dto.itemIds).size) throw Invalid('INVALID_ITEMS', 'Neke stavke ne pripadaju ovom računu');
+      if (items.some((i) => i.status === 'VOIDED')) throw Invalid('CANNOT_MOVE_VOIDED', 'Stornirane stavke se ne prebacuju');
+
+      await tx.update(orderItems).set({ orderId: dst.id }).where(inArray(orderItems.id, items.map((i) => i.id)));
+      await this.recompute(tx, src);
+      const [dstFresh] = await tx.select().from(orders).where(eq(orders.id, dst.id));
+      await this.recompute(tx, dstFresh);
+      const summary = items.map((i) => ({ itemId: i.id, product: i.name, quantity: i.quantity }));
+      await audit(tx, u, 'order.items.move_out', 'order', src.id, { toOrderId: dst.id, toNumber: dst.number, items: summary });
+      await audit(tx, u, 'order.items.move_in', 'order', dst.id, { fromOrderId: src.id, fromNumber: src.number, items: summary });
+      return { from: await this.get(u, src.id, tx), to: await this.get(u, dst.id, tx) };
+    });
+  }
+
+  /**
+   * Spajanje tura: sve stavke izvornih računa prelaze na ciljni račun (npr. Žika plaća za Peru i Miku).
+   * Izvorni računi ne smeju imati naplatu; posle spajanja dobijaju status MERGED i vezu na ciljni.
+   */
+  async merge(u: AuthUser, targetId: string, dto: MergeOrdersDto) {
+    return this.db.transaction(async (tx) => {
+      const ids = [...new Set([targetId, ...dto.fromOrderIds])].sort();
+      if (ids.length < 2) throw Invalid('MERGE_NEEDS_TWO', 'Izaberite bar jedan račun za spajanje');
+      const locked: Record<string, OrderRow> = {};
+      for (const id of ids) locked[id] = await this.lockOrder(tx, u, id);
+      const target = locked[targetId];
+      const merged = [];
+      for (const id of ids.filter((x) => x !== targetId)) {
+        const src = locked[id];
+        if (!dec(src.paidTotal).isZero()) {
+          throw Conflict('ORDER_HAS_PAYMENTS', `Račun #${src.number} ima naplatu i ne može se spojiti`);
+        }
+        await tx.update(orderItems).set({ orderId: target.id }).where(eq(orderItems.orderId, src.id));
+        await tx.update(orders).set({
+          status: 'MERGED', mergedIntoId: target.id, subtotal: '0.00', discountTotal: '0.00', total: '0.00',
+          closedAt: new Date(), closedById: u.userId, version: src.version + 1, updatedAt: new Date(),
+        }).where(eq(orders.id, src.id));
+        await audit(tx, u, 'order.merged_into', 'order', src.id, { intoOrderId: target.id, intoNumber: target.number });
+        merged.push({ id: src.id, number: src.number, tabName: src.tabName });
+      }
+      const [fresh] = await tx.select().from(orders).where(eq(orders.id, target.id));
+      await this.recompute(tx, fresh);
+      await audit(tx, u, 'order.merge', 'order', target.id, { merged });
+      return this.get(u, target.id, tx);
+    });
+  }
+
+  /**
+   * Storno celog računa: sve poslate stavke se storniraju sa razlogom, neposlate uklanjaju.
+   * Ako nema naplate, račun se otkazuje. Sa naplatom → 409 (povraćaj novca još nije podržan).
+   */
+  async voidAll(u: AuthUser, orderId: string, dto: VoidItemDto) {
+    if (!u.permissions.includes(P.ORDER_VOID)) {
+      throw Conflict('FORBIDDEN_VOID', 'Storniranje zahteva pravo order.void');
+    }
+    return this.db.transaction(async (tx) => {
+      const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
+      if (!dec(o.paidTotal).isZero()) throw Conflict('ORDER_HAS_PAYMENTS', 'Račun ima naplatu — storno celog računa nije moguć');
+      const sent = await tx.update(orderItems)
+        .set({ status: 'VOIDED', voidReason: dto.reason, voidedById: u.userId, voidedAt: new Date(), discountAmount: '0.00' })
+        .where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'SENT'))).returning();
+      await tx.delete(orderItems).where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'NEW')));
+      await tx.update(orders).set({
+        status: 'CANCELLED', subtotal: '0.00', discountTotal: '0.00', total: '0.00',
+        closedAt: new Date(), closedById: u.userId, version: o.version + 1, updatedAt: new Date(),
+      }).where(eq(orders.id, o.id));
+      for (const i of sent) {
+        await audit(tx, u, 'order.item.void', 'order', o.id, {
+          itemId: i.id, product: i.name, quantity: i.quantity, lineTotal: i.lineTotal, reason: dto.reason,
+        });
+      }
+      await audit(tx, u, 'order.void_all', 'order', o.id, { reason: dto.reason, voidedItems: sent.length });
+      return this.get(u, o.id, tx);
     });
   }
 

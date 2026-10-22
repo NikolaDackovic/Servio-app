@@ -51,6 +51,15 @@ Osnovna putanja: `/api/v1`. Interaktivna dokumentacija (OpenAPI/Swagger): `http:
 | GET `/staff-shifts/current`, POST `/staff-shifts/current/end` | order.read | Specifikacija pazara; kraj smene (409 `STAFF_HAS_OPEN_ORDERS`) |
 | GET `/staff-shifts?businessDayId`, GET `/staff-shifts/:id` | order.read | Tuđe smene uz order.read_all |
 | GET `/staff/waiters` | order.read | Zaposleni koji mogu da preuzmu račune |
+| POST `/orders/:id/settle` `{ parts[{method, amount?, tendered?}], idempotencyKey }` | payment.create | Više delova u jednoj transakciji (mix); `REPRESENTATION` samo ceo račun |
+| PUT `/orders/:id/discount` `{ discountId \| null }` | order.write + order.discount | Popust na ceo račun |
+| PUT `/orders/:id/buyer` `{ idType, idValue, optionalBasis?, optionalValue? }` | order.write | Kupac; `idType: null` briše |
+| PATCH `/orders/:id` `{ tabName }` | order.write | Naziv ture |
+| POST `/orders/:id/move-items` `{ itemIds[], toOrderId? \| toTableId?, toTabName? }` | order.write | Stavke na drugu turu / novu turu / drugi sto |
+| POST `/orders/:id/merge` `{ fromOrderIds[] }` | order.write | Spajanje tura (izvorne bez naplate → MERGED) |
+| POST `/orders/:id/void-all` `{ reason }` | order.write + order.void | Storno celog računa |
+| GET/POST `/discounts`, PATCH `/discounts/:id` | order.read / discount.manage | Popusti |
+| GET `/fiscal/buyer-codes` | order.read | Šifarnici kupca |
 | POST `/orders/transfer` `{ orderIds[], toUserId }` | order.write | Svoje račune; tuđe uz order.transfer; sve-ili-ništa |
 | GET `/orders/:id/history` | order.read | Istorija računa iz revizijskog traga |
 

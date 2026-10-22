@@ -17,7 +17,7 @@ npm run dev:admin                 # ADMIN http://localhost:5174 (proxy /api → 
 
 Prvi ulazak na KASU: prijava `admin@demo.local` / `Demo123!` → izbor kase ("Kasa 1 – Šank") → PIN prijava. Demo PIN-ovi: 1111 konobar, 2222 kasir, 9999 menadžer. ADMIN: `admin@demo.local` ili `menadzer@demo.local` / `Demo123!`.
 
-Postojeća baza se ažurira sa `npm run db:migrate` — migracija `0001` dodaje poslovni dan i smene zaposlenih i daje pravo `day.manage` postojećim ulogama (admin, vlasnik, menadžer, kasir).
+Postojeća baza se ažurira sa `npm run db:migrate`: `0001` dodaje poslovni dan i smene zaposlenih (pravo `day.manage`), `0002` popuste, kupca na računu, ture, reprezentaciju i prava `order.discount` / `discount.manage`. Postojeća baza **nema demo popuste** (seed se ne ponavlja) — dodajte ih u ADMIN → Popusti.
 
 ## Windows — razvoj
 1. Instalirati **PostgreSQL 16** (EDB installer sa postgresql.org). Zapamtiti lozinku korisnika `postgres`, port ostaviti 5432.

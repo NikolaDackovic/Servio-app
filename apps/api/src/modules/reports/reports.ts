@@ -82,17 +82,21 @@ export async function computeSales(db: DbOrTx, locationId: string, scope: SalesS
     FROM orders o WHERE ${oFilter}`);
 
   const taxes = await rows<{ label: string; rate: string; gross: string }>(db, sql`
-    SELECT i.tax_label AS label, i.tax_rate::text AS rate, sum(i.line_total)::numeric(14,2)::text AS gross
+    SELECT i.tax_label AS label, i.tax_rate::text AS rate, sum(i.line_total - i.discount_amount)::numeric(14,2)::text AS gross
     FROM order_items i JOIN orders o ON o.id = i.order_id
     WHERE ${oFilter} AND i.status <> 'VOIDED'
     GROUP BY i.tax_label, i.tax_rate ORDER BY i.tax_label`);
 
   const byProduct = await rows<{ productId: string; name: string; quantity: string; gross: string }>(db, sql`
     SELECT i.product_id AS "productId", min(i.name) AS name, sum(i.quantity)::numeric(12,3)::text AS quantity,
-           sum(i.line_total)::numeric(14,2)::text AS gross
+           sum(i.line_total - i.discount_amount)::numeric(14,2)::text AS gross
     FROM order_items i JOIN orders o ON o.id = i.order_id
     WHERE ${oFilter} AND i.status <> 'VOIDED'
-    GROUP BY i.product_id ORDER BY sum(i.line_total) DESC`);
+    GROUP BY i.product_id ORDER BY sum(i.line_total - i.discount_amount) DESC`);
+
+  const [disc] = await rows<{ count: number; amount: string }>(db, sql`
+    SELECT count(*) FILTER (WHERE o.discount_total > 0)::int AS count, coalesce(sum(o.discount_total),0)::numeric(14,2)::text AS amount
+    FROM orders o WHERE ${oFilter}`);
 
   const byWaiter = await rows<{ waiterId: string; name: string; orders: number; gross: string }>(db, sql`
     SELECT o.waiter_id AS "waiterId", u.full_name AS name, count(*)::int AS orders, sum(o.total)::numeric(14,2)::text AS gross
@@ -130,8 +134,11 @@ export async function computeSales(db: DbOrTx, locationId: string, scope: SalesS
     period: scope.kind === 'range' ? { from: scope.from, to: scope.to, timezone: tz } : { businessDayId: scope.businessDayId, timezone: tz },
     sales: { orders: totals.orders, gross: totals.gross, averageOrder: totals.orders ? money(dec(totals.gross).div(totals.orders)) : '0.00' },
     taxes: taxSummary,
+    discounts: disc,
     payments: {
-      total: money(sum(paymentsByMethod.map((p) => p.amount))),
+      /** Stvarno naplaćeno (novac); reprezentacija nije novac i prikazuje se odvojeno. */
+      total: money(sum(paymentsByMethod.filter((p) => p.method !== 'REPRESENTATION').map((p) => p.amount))),
+      representation: money(sum(paymentsByMethod.filter((p) => p.method === 'REPRESENTATION').map((p) => p.amount))),
       byMethod: paymentsByMethod,
       containsTestPayments: paymentsByMethod.some((p) => p.mode === 'TEST'),
     },
