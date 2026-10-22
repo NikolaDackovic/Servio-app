@@ -8,7 +8,7 @@ import {
 } from 'class-validator';
 import { and, asc, count, eq, ilike, or, SQL } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
-import { categories, productPriceChanges, products, taxRates } from '../../db/schema';
+import { categories, locations, prepStations, productPriceChanges, products, taxRates } from '../../db/schema';
 import { AuthUser, CurrentUser, RequirePermissions } from '../../common/auth-context';
 import { P } from '../../common/permissions';
 import { audit } from '../../common/audit';
@@ -22,8 +22,11 @@ class CreateCategoryDto {
   @IsString() @Length(1, 80) name: string;
   @IsOptional() @Matches(COLOR_RE) color?: string;
   @IsOptional() @IsInt() @Min(0) @Max(100000) sortOrder?: number;
+  /** Pripremna pozicija (šank, kuhinja…); null = bez rutiranja */
+  @IsOptional() @IsUUID() prepStationId?: string | null;
 }
 class UpdateCategoryDto {
+  @IsOptional() @IsUUID() prepStationId?: string | null;
   @IsOptional() @IsString() @Length(1, 80) name?: string;
   @IsOptional() @Matches(COLOR_RE) color?: string;
   @IsOptional() @IsInt() @Min(0) @Max(100000) sortOrder?: number;
@@ -41,8 +44,11 @@ class CreateProductDto {
   @Matches(PRICE_RE, { message: 'Cena mora biti decimalni broj sa najviše 2 decimale (npr. "180.00")' }) price: string;
   @IsOptional() @Matches(COLOR_RE) color?: string;
   @IsOptional() @IsInt() @Min(0) @Max(100000) sortOrder?: number;
+  /** Pozicija artikla — ima prednost nad pozicijom kategorije; null = koristi kategoriju */
+  @IsOptional() @IsUUID() prepStationId?: string | null;
 }
 class UpdateProductDto {
+  @IsOptional() @IsUUID() prepStationId?: string | null;
   @IsOptional() @IsUUID() categoryId?: string;
   @IsOptional() @IsUUID() taxRateId?: string;
   @IsOptional() @IsString() @Length(1, 32) barcode?: string;
@@ -76,8 +82,18 @@ export class CatalogService {
       .orderBy(asc(categories.sortOrder), asc(categories.name));
   }
 
+  /** Pozicija mora pripadati lokalu iste organizacije. */
+  private async assertStation(tx: any, u: AuthUser, stationId?: string | null) {
+    if (!stationId) return;
+    const [s] = await tx.select({ id: prepStations.id }).from(prepStations)
+      .innerJoin(locations, eq(locations.id, prepStations.locationId))
+      .where(and(eq(prepStations.id, stationId), eq(locations.organizationId, u.organizationId)));
+    if (!s) throw Invalid('INVALID_STATION', 'Pripremna pozicija ne postoji');
+  }
+
   async createCategory(u: AuthUser, dto: CreateCategoryDto) {
     return this.db.transaction(async (tx) => {
+      await this.assertStation(tx, u, dto.prepStationId);
       const [c] = await tx.insert(categories).values({ organizationId: u.organizationId, ...dto, name: dto.name.trim() }).returning();
       await audit(tx, u, 'category.create', 'category', c.id, { name: c.name });
       return c;
@@ -86,6 +102,7 @@ export class CatalogService {
 
   async updateCategory(u: AuthUser, id: string, dto: UpdateCategoryDto) {
     return this.db.transaction(async (tx) => {
+      await this.assertStation(tx, u, dto.prepStationId);
       const [c] = await tx.update(categories).set({ ...dto, updatedAt: new Date() })
         .where(and(eq(categories.id, id), eq(categories.organizationId, u.organizationId))).returning();
       if (!c) throw NotFound('Kategorija');
@@ -124,6 +141,7 @@ export class CatalogService {
         id: products.id, code: products.code, barcode: products.barcode, name: products.name, unit: products.unit,
         price: products.price, color: products.color, sortOrder: products.sortOrder, active: products.active,
         categoryId: products.categoryId, taxRateId: products.taxRateId, taxLabel: taxRates.label, taxRate: taxRates.rate,
+        prepStationId: products.prepStationId,
       })
       .from(products).innerJoin(taxRates, eq(taxRates.id, products.taxRateId))
       .where(where).orderBy(asc(products.sortOrder), asc(products.name))
@@ -134,6 +152,7 @@ export class CatalogService {
   async createProduct(u: AuthUser, dto: CreateProductDto) {
     return this.db.transaction(async (tx) => {
       await this.assertRefs(tx, u, dto.categoryId, dto.taxRateId);
+      await this.assertStation(tx, u, dto.prepStationId);
       const [p] = await tx.insert(products).values({
         organizationId: u.organizationId, ...dto, name: dto.name.trim(), price: money(dto.price),
       }).returning();
@@ -149,6 +168,7 @@ export class CatalogService {
         .where(and(eq(products.id, id), eq(products.organizationId, u.organizationId))).for('update');
       if (!current) throw NotFound('Proizvod');
       await this.assertRefs(tx, u, dto.categoryId, dto.taxRateId);
+      await this.assertStation(tx, u, dto.prepStationId);
       const patch: Record<string, unknown> = { ...dto, updatedAt: new Date() };
       if (dto.price !== undefined) patch.price = money(dto.price);
       const [p] = await tx.update(products).set(patch).where(eq(products.id, id)).returning();

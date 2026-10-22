@@ -15,6 +15,7 @@ import { eq } from 'drizzle-orm';
 import * as s from './schema';
 import { DEFAULT_ROLES } from '../common/permissions';
 import { hashSecret, pinLookup } from '../common/security';
+import { createHash, randomBytes } from 'crypto';
 
 export const DEMO_ORG_NAME = 'DEMO Kafe Restoran';
 
@@ -51,6 +52,7 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       await mkUser('Marko Konobar', 'WAITER', { pin: '1111' });
       await mkUser('Ana Kasir', 'CASHIER', { pin: '2222' });
       await mkUser('Jelena Menadžer', 'MANAGER', { pin: '9999', email: 'menadzer@demo.local', password: 'Demo123!' });
+      await mkUser('Kuhinja', 'KITCHEN', { pin: '3333' });
 
       // Oznake i stope proveriti prema važećem tehničkom vodiču PU pre produkcije.
       const [vat20] = await tx.insert(s.taxRates).values({ organizationId: org.id, label: 'Đ', name: 'Opšta stopa PDV', rate: '20.00' }).returning();
@@ -63,6 +65,23 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       const sok = await cat('Bezalkoholna pića', '#2E86AB', 2);
       const pivo = await cat('Pivo i vino', '#C9A227', 3);
       const hrana = await cat('Hrana', '#3C9D5D', 4);
+
+      // Štampa i KDS (demo): SIMULIRANI štampači — Print Bridge ih ne šalje na papir, već ih beleži kao SIMULATED.
+      const [prBar] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Šank – simulacija', connection: 'SIMULATED' }).returning();
+      const [prKitchen] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Kuhinja – simulacija', connection: 'SIMULATED' }).returning();
+      const [prReceipt] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Kasa 1 – računi (simulacija)', connection: 'SIMULATED' }).returning();
+      const [stBar] = await tx.insert(s.prepStations).values({ locationId: loc.id, name: 'Šank', kind: 'BAR', printerId: prBar.id }).returning();
+      const [stKitchen] = await tx.insert(s.prepStations).values({ locationId: loc.id, name: 'Kuhinja', kind: 'KITCHEN', printerId: prKitchen.id }).returning();
+      for (const c of [kafa, sok, pivo]) await tx.update(s.categories).set({ prepStationId: stBar.id }).where(eq(s.categories.id, c.id));
+      await tx.update(s.categories).set({ prepStationId: stKitchen.id }).where(eq(s.categories.id, hrana.id));
+      await tx.update(s.devices).set({ receiptPrinterId: prReceipt.id }).where(eq(s.devices.id, pos1.id));
+      const [kds] = await tx.insert(s.devices).values({ locationId: loc.id, name: 'KDS – Kuhinja', kind: 'KDS' }).returning();
+      // Demo Print Bridge: ključ se ispisuje samo ovde (razvoj). U produkciji ključ izdaje ADMIN → Štampa.
+      const bridgeKey = `pb_${randomBytes(32).toString('base64url')}`;
+      const [bridge] = await tx.insert(s.devices).values({
+        locationId: loc.id, name: 'Print Bridge – demo', kind: 'BRIDGE',
+        apiKeyHash: createHash('sha256').update(bridgeKey).digest('hex'), apiKeyPrefix: bridgeKey.slice(0, 10),
+      }).returning();
 
       const prods: [typeof kafa, string, string, string, string][] = [
         [kafa, 'K001', 'Espresso', '180.00', vat20.id],
@@ -91,7 +110,10 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       for (let t = 1; t <= 8; t++) {
         await tx.insert(s.diningTables).values({ locationId: loc.id, name: `Sto ${t}`, area: t <= 6 ? 'Sala' : 'Bašta', seats: 4, posX: ((t - 1) % 4) * 140, posY: Math.floor((t - 1) / 4) * 120 });
       }
-      return { created: true, organizationId: org.id, locationId: loc.id, posDeviceId: pos1.id };
+      return {
+        created: true, organizationId: org.id, locationId: loc.id, posDeviceId: pos1.id, kdsDeviceId: kds.id,
+        bridgeDeviceId: bridge.id, bridgeKey, stations: { bar: stBar.id, kitchen: stKitchen.id },
+      };
     });
   } finally {
     await pool.end();
@@ -106,6 +128,10 @@ if (require.main === module) {
     process.exit(1);
   }
   seed(url, pepper)
-    .then((r) => console.log(r.created ? `Demo podaci kreirani: ${JSON.stringify(r)}` : 'Demo podaci već postoje — preskačem.'))
+    .then((r: any) => {
+      if (!r.created) return console.log('Demo podaci već postoje — preskačem.');
+      console.log(`Demo podaci kreirani (organizacija ${r.organizationId}).`);
+      console.log(`Print Bridge (demo) — ključ za apps/print-bridge/.env (prikazuje se samo sada):\n  BRIDGE_KEY=${r.bridgeKey}`);
+    })
     .catch((e) => { console.error('Seed nije uspeo:', e.message, e.cause?.message ? `\nUzrok: ${e.cause.message}` : ''); process.exit(1); });
 }

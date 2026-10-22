@@ -20,7 +20,13 @@ const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3 
 const money = (name: string) => numeric(name, { precision: 14, scale: 2 });
 const qty = (name: string) => numeric(name, { precision: 12, scale: 3 });
 
-export const deviceKind = pgEnum('device_kind', ['POS', 'MOBILE', 'KDS']);
+export const deviceKind = pgEnum('device_kind', ['POS', 'MOBILE', 'KDS', 'BRIDGE']);
+export const stationKind = pgEnum('station_kind', ['BAR', 'KITCHEN', 'OTHER']);
+export const printerConnection = pgEnum('printer_connection', ['SIMULATED', 'NETWORK_ESCPOS', 'WINDOWS_RAW']);
+export const kdsTicketStatus = pgEnum('kds_ticket_status', ['NEW', 'IN_PROGRESS', 'READY', 'DONE']);
+export const printJobKind = pgEnum('print_job_kind', ['ORDER_TICKET', 'VOID_TICKET', 'RECEIPT', 'TEST_PAGE']);
+export const printJobStatus = pgEnum('print_job_status', ['PENDING', 'PRINTING', 'PRINTED', 'SIMULATED', 'FAILED']);
+export const fiscalStatus = pgEnum('fiscal_status', ['PENDING', 'SIGNED', 'FAILED', 'NOT_REQUIRED']);
 export const orderStatus = pgEnum('order_status', ['OPEN', 'PAID', 'CANCELLED', 'MERGED']);
 export const orderItemStatus = pgEnum('order_item_status', ['NEW', 'SENT', 'VOIDED']);
 export const paymentMethod = pgEnum('payment_method', ['CASH', 'CARD', 'TRANSFER', 'REPRESENTATION']);
@@ -57,6 +63,12 @@ export const devices = pgTable('devices', {
   name: text('name').notNull(),
   kind: deviceKind('kind').notNull().default('POS'),
   active: boolean('active').notNull().default(true),
+  /** Za Print Bridge: heš API ključa (ključ se prikazuje samo jednom pri izdavanju). */
+  apiKeyHash: text('api_key_hash'),
+  apiKeyPrefix: varchar('api_key_prefix', { length: 12 }),
+  lastSeenAt: ts('last_seen_at'),
+  /** Štampač za račune ove kase. */
+  receiptPrinterId: uuid('receipt_printer_id'),
   createdAt: ts('created_at').notNull().defaultNow(),
 }, (t) => [uniqueIndex('devices_location_name_uq').on(t.locationId, t.name)]);
 
@@ -110,6 +122,8 @@ export const categories = pgTable('categories', {
   name: text('name').notNull(),
   color: varchar('color', { length: 16 }),
   sortOrder: integer('sort_order').notNull().default(0),
+  /** Podrazumevana pripremna pozicija za artikle kategorije (šank, kuhinja…). */
+  prepStationId: uuid('prep_station_id'),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
   updatedAt: ts('updated_at').notNull().defaultNow(),
@@ -126,6 +140,8 @@ export const products = pgTable('products', {
   unit: varchar('unit', { length: 12 }).notNull().default('kom'),
   price: money('price').notNull(),
   color: varchar('color', { length: 16 }),
+  /** Pripremna pozicija artikla — ima prednost nad pozicijom kategorije. */
+  prepStationId: uuid('prep_station_id'),
   sortOrder: integer('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
@@ -315,6 +331,10 @@ export const orderItems = pgTable('order_items', {
   note: text('note'),
   status: orderItemStatus('status').notNull().default('NEW'),
   sendBatch: integer('send_batch'),
+  /** Snimak rutiranja u trenutku slanja (pozicija i KDS tiket). */
+  prepStationId: uuid('prep_station_id'),
+  kdsTicketId: uuid('kds_ticket_id'),
+  readyAt: ts('ready_at'),
   sentAt: ts('sent_at'),
   voidReason: text('void_reason'),
   voidedById: uuid('voided_by_id').references(() => users.id),
@@ -374,4 +394,109 @@ export const auditLogs = pgTable('audit_logs', {
 }, (t) => [
   index('audit_entity_idx').on(t.organizationId, t.entity, t.entityId),
   index('audit_created_idx').on(t.createdAt),
+]);
+
+// ---------- Faza 3: pripremne pozicije, štampa, KDS, fiskalizacija ----------
+
+export const printers = pgTable('printers', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  name: text('name').notNull(),
+  connection: printerConnection('connection').notNull().default('SIMULATED'),
+  /** NETWORK_ESCPOS: IP adresa i port (obično 9100) */
+  host: varchar('host', { length: 120 }),
+  port: integer('port'),
+  /** WINDOWS_RAW: tačan naziv štampača u Windowsu */
+  windowsName: text('windows_name'),
+  paperWidth: integer('paper_width').notNull().default(80),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('printers_location_name_uq').on(t.locationId, t.name),
+  check('printers_paper', sql`${t.paperWidth} IN (58, 80)`),
+  check('printers_network_cfg', sql`${t.connection} <> 'NETWORK_ESCPOS' OR (${t.host} IS NOT NULL AND ${t.port} BETWEEN 1 AND 65535)`),
+  check('printers_windows_cfg', sql`${t.connection} <> 'WINDOWS_RAW' OR ${t.windowsName} IS NOT NULL`),
+]);
+
+export const prepStations = pgTable('prep_stations', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  name: text('name').notNull(),
+  kind: stationKind('kind').notNull().default('OTHER'),
+  printerId: uuid('printer_id').references(() => printers.id),
+  /** Da li se pozicija prikazuje na KDS ekranu */
+  kdsEnabled: boolean('kds_enabled').notNull().default(true),
+  /** Skladište iz kog se troši roba za artikle ove pozicije (faza 4) */
+  warehouseId: uuid('warehouse_id'),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [uniqueIndex('stations_location_name_uq').on(t.locationId, t.name)]);
+
+/** Jedan tiket = jedna tura slanja jednog računa za jednu pripremnu poziciju. */
+export const kdsTickets = pgTable('kds_tickets', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  orderId: uuid('order_id').notNull().references(() => orders.id),
+  stationId: uuid('station_id').notNull().references(() => prepStations.id),
+  batch: integer('batch').notNull(),
+  status: kdsTicketStatus('status').notNull().default('NEW'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  startedAt: ts('started_at'),
+  readyAt: ts('ready_at'),
+  doneAt: ts('done_at'),
+}, (t) => [
+  uniqueIndex('kds_ticket_order_batch_station_uq').on(t.orderId, t.batch, t.stationId),
+  index('kds_station_status_idx').on(t.stationId, t.status),
+]);
+
+/** Red za štampu. dedupeKey garantuje da ista tura za istu poziciju nikad ne nastane dvaput. */
+export const printJobs = pgTable('print_jobs', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  printerId: uuid('printer_id').notNull().references(() => printers.id),
+  stationId: uuid('station_id').references(() => prepStations.id),
+  orderId: uuid('order_id').references(() => orders.id),
+  kind: printJobKind('kind').notNull(),
+  dedupeKey: varchar('dedupe_key', { length: 160 }).notNull(),
+  /** Sadržaj za štampu (nezavisan od štampača): naslov, linije, napomene. */
+  payload: jsonb('payload').notNull(),
+  status: printJobStatus('status').notNull().default('PENDING'),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: ts('next_attempt_at').notNull().defaultNow(),
+  lastError: text('last_error'),
+  claimedByDeviceId: uuid('claimed_by_device_id'),
+  claimedAt: ts('claimed_at'),
+  finishedAt: ts('finished_at'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('print_jobs_dedupe_uq').on(t.dedupeKey),
+  index('print_jobs_queue_idx').on(t.locationId, t.status, t.nextAttemptAt),
+]);
+
+/**
+ * Fiskalni račun (zahtev prema fiskalnom provajderu i njegov odgovor).
+ * Račun se smatra fiskalizovanim ISKLJUČIVO kada je status SIGNED i provajder je vratio broj.
+ */
+export const fiscalReceipts = pgTable('fiscal_receipts', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  orderId: uuid('order_id').notNull().references(() => orders.id),
+  provider: varchar('provider', { length: 32 }).notNull(),
+  /** Vrsta transakcije: SALE / REFUND; vrsta računa: NORMAL / TRAINING (testni) */
+  transactionType: varchar('transaction_type', { length: 12 }).notNull().default('SALE'),
+  invoiceType: varchar('invoice_type', { length: 12 }).notNull(),
+  status: fiscalStatus('status').notNull().default('PENDING'),
+  request: jsonb('request').notNull(),
+  response: jsonb('response'),
+  invoiceNumber: varchar('invoice_number', { length: 80 }),
+  verificationUrl: text('verification_url'),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: ts('next_attempt_at').notNull().defaultNow(),
+  lastError: text('last_error'),
+  signedAt: ts('signed_at'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('fiscal_order_tx_uq').on(t.orderId, t.transactionType),
+  index('fiscal_queue_idx').on(t.status, t.nextAttemptAt),
+  check('fiscal_signed_has_number', sql`${t.status} <> 'SIGNED' OR (${t.invoiceNumber} IS NOT NULL AND ${t.signedAt} IS NOT NULL)`),
 ]);

@@ -15,6 +15,10 @@ export interface AppConfig {
   corsOrigin: string[];
   /** Iteracija 1 podržava isključivo TEST režim naplate (nema integracije sa platnim terminalom). */
   paymentMode: 'TEST';
+  /** Fiskalni provajder: TEST (testni adapter, jasno označen) ili NONE (fiskalizacija isključena). LIVE ne postoji. */
+  fiscalProvider: 'TEST' | 'NONE';
+  /** Interval pozadinskog obrađivača fiskalnog reda (ms); 0 = samo obrada odmah posle naplate. */
+  fiscalWorkerIntervalMs: number;
 }
 
 export function loadConfig(): AppConfig {
@@ -31,7 +35,15 @@ export function loadConfig(): AppConfig {
     port: Number(process.env.PORT ?? 3000),
     corsOrigin: (process.env.CORS_ORIGIN ?? 'http://localhost:5173').split(',').map((s) => s.trim()),
     paymentMode: 'TEST',
+    fiscalProvider: fiscalProvider(),
+    fiscalWorkerIntervalMs: Number(process.env.FISCAL_WORKER_INTERVAL_MS ?? 5000),
   };
+}
+
+function fiscalProvider(): 'TEST' | 'NONE' {
+  const v = (process.env.FISCAL_PROVIDER ?? 'TEST').toUpperCase();
+  if (v === 'TEST' || v === 'NONE') return v;
+  throw new Error(`FISCAL_PROVIDER=${v} nije podržan. Podržano: TEST, NONE. Integracija sa stvarnim PFR/ESIR sistemom ne postoji.`);
 }
 
 export const CONFIG = Symbol('CONFIG');

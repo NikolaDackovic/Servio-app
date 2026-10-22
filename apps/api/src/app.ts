@@ -18,6 +18,10 @@ import { ReportsModule } from './modules/reports/reports';
 import { HealthModule } from './modules/health/health';
 import { DayModule } from './modules/day/day';
 import { DiscountsModule } from './modules/discounts/discounts';
+import { EventsModule } from './common/events';
+import { FiscalModule } from './modules/fiscal/fiscal';
+import { PrepModule } from './modules/prep/prep';
+import { attachRealtime } from './modules/realtime/realtime';
 
 export function buildAppModule(cfg: AppConfig): DynamicModule {
   @Module({})
@@ -34,6 +38,7 @@ export function buildAppModule(cfg: AppConfig): DynamicModule {
       ConfigModule,
       DbModule,
       JwtModule.register({ global: true, secret: cfg.jwtSecret, signOptions: { expiresIn: '12h' } }),
+      EventsModule, FiscalModule, PrepModule,
       AuthModule, CatalogModule, TablesModule, ShiftsModule, OrdersModule, ReportsModule, HealthModule, DayModule, DiscountsModule,
     ],
     providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
@@ -55,5 +60,6 @@ export async function createApp(cfg: AppConfig): Promise<INestApplication> {
     .setDescription('REST API ugostiteljskog POS sistema. Svi novčani iznosi su decimalni stringovi sa 2 decimale.')
     .build();
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, doc));
+  attachRealtime(app);
   return app;
 }

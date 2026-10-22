@@ -5,7 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { IsEmail, IsOptional, IsString, IsUUID, Length, Matches } from 'class-validator';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, ne } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import { devices, locations, roles, users } from '../../db/schema';
 import { AuthUser, CurrentUser, JwtPayload, Public } from '../../common/auth-context';
@@ -69,7 +69,7 @@ export class AuthService {
     let deviceId: string | null = null;
     if (dto.deviceId) {
       const [dev] = await this.db.select({ id: devices.id }).from(devices)
-        .where(and(eq(devices.id, dto.deviceId), eq(devices.locationId, locationId), eq(devices.active, true)));
+        .where(and(eq(devices.id, dto.deviceId), eq(devices.locationId, locationId), eq(devices.active, true), ne(devices.kind, 'BRIDGE')));
       if (!dev) throw new UnauthorizedException('Uređaj ne pripada izabranom lokalu');
       deviceId = dev.id;
     }
@@ -78,9 +78,10 @@ export class AuthService {
 
   async pinLogin(dto: PinLoginDto) {
     const [dev] = await this.db
-      .select({ id: devices.id, locationId: devices.locationId, org: locations.organizationId, active: devices.active })
+      .select({ id: devices.id, locationId: devices.locationId, org: locations.organizationId, active: devices.active, kind: devices.kind })
       .from(devices).innerJoin(locations, eq(locations.id, devices.locationId)).where(eq(devices.id, dto.deviceId));
-    if (!dev || !dev.active) throw new UnauthorizedException('Uređaj nije registrovan ili nije aktivan');
+    // Print Bridge nije uređaj za prijavu zaposlenih (ima sopstveni API ključ).
+    if (!dev || !dev.active || dev.kind === 'BRIDGE') throw new UnauthorizedException('Uređaj nije registrovan ili nije aktivan');
 
     const lookup = pinLookup(dto.pin, this.cfg.pinPepper);
     const [user] = await this.db.select().from(users)
@@ -93,7 +94,7 @@ export class AuthService {
     const locs = await this.db.select({ id: locations.id, name: locations.name, timezone: locations.timezone })
       .from(locations).where(eq(locations.organizationId, u.organizationId)).orderBy(asc(locations.name));
     const devs = await this.db.select({ id: devices.id, name: devices.name, kind: devices.kind })
-      .from(devices).where(and(eq(devices.locationId, u.locationId), eq(devices.active, true))).orderBy(asc(devices.name));
+      .from(devices).where(and(eq(devices.locationId, u.locationId), eq(devices.active, true), ne(devices.kind, 'BRIDGE'))).orderBy(asc(devices.name));
     return { user: u, locations: locs, devices: devs };
   }
 }

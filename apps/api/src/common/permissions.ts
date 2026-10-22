@@ -17,6 +17,8 @@ export const P = {
   REPORT_READ: 'report.read',
   USER_MANAGE: 'user.manage',
   AUDIT_READ: 'audit.read',
+  KDS_USE: 'kds.use', // rad na KDS ekranu (statusi tiketa i stavki)
+  SETTINGS_MANAGE: 'settings.manage', // pripremne pozicije, štampači, Print Bridge, fiskalni pregled
 } as const;
 
 export type Permission = (typeof P)[keyof typeof P];
@@ -29,15 +31,15 @@ export const DEFAULT_ROLES: { code: string; name: string; permissions: Permissio
   {
     code: 'MANAGER', name: 'Menadžer',
     permissions: [P.CATALOG_READ, P.CATALOG_WRITE, P.TABLE_READ, P.TABLE_WRITE, P.ORDER_READ, P.ORDER_READ_ALL,
-      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.DISCOUNT_MANAGE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ],
+      P.ORDER_WRITE, P.ORDER_VOID, P.ORDER_TRANSFER, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.DISCOUNT_MANAGE, P.SHIFT_MANAGE, P.DAY_MANAGE, P.REPORT_READ, P.AUDIT_READ, P.KDS_USE, P.SETTINGS_MANAGE],
   },
   {
     code: 'CASHIER', name: 'Kasir',
-    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.ORDER_WRITE, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.SHIFT_MANAGE, P.DAY_MANAGE],
+    permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.ORDER_WRITE, P.PAYMENT_CREATE, P.ORDER_DISCOUNT, P.SHIFT_MANAGE, P.DAY_MANAGE, P.KDS_USE],
   },
   {
     code: 'WAITER', name: 'Konobar',
     permissions: [P.CATALOG_READ, P.TABLE_READ, P.ORDER_READ, P.ORDER_WRITE, P.PAYMENT_CREATE, P.ORDER_DISCOUNT],
   },
-  { code: 'KITCHEN', name: 'Kuhinja', permissions: [P.CATALOG_READ, P.ORDER_READ, P.ORDER_READ_ALL] },
+  { code: 'KITCHEN', name: 'Kuhinja', permissions: [P.CATALOG_READ, P.ORDER_READ, P.ORDER_READ_ALL, P.KDS_USE] },
 ];

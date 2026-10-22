@@ -14,7 +14,7 @@ export interface Ctx {
   app: INestApplication;
   http: () => ReturnType<typeof request>;
   pool: Pool;
-  ids: { org: string; location: string; posDevice: string };
+  ids: { org: string; location: string; posDevice: string; kdsDevice: string; bridgeKey: string; stations: { bar: string; kitchen: string } };
 }
 
 /** Svaki test fajl dobija čistu bazu: šema se briše, primenjuju se SVE migracije, pa demo seed. */
@@ -30,6 +30,7 @@ export async function setupApp(): Promise<Ctx> {
   const cfg: AppConfig = {
     databaseUrl: TEST_DB_URL, jwtSecret: 'test-secret-test-secret-test-secret-123', pinPepper: PEPPER,
     port: 0, corsOrigin: ['http://localhost'], paymentMode: 'TEST',
+    fiscalProvider: 'TEST', fiscalWorkerIntervalMs: 0, // fiskalni red se u testovima obrađuje eksplicitno
   };
   const app = await createApp(cfg);
   app.useLogger(false);
@@ -38,7 +39,10 @@ export async function setupApp(): Promise<Ctx> {
   return {
     app, pool,
     http: () => request(app.getHttpServer()),
-    ids: { org: s.organizationId, location: (s as any).locationId, posDevice: (s as any).posDeviceId },
+    ids: {
+      org: s.organizationId, location: (s as any).locationId, posDevice: (s as any).posDeviceId,
+      kdsDevice: (s as any).kdsDeviceId, bridgeKey: (s as any).bridgeKey, stations: (s as any).stations,
+    },
   };
 }
 

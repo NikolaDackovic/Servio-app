@@ -5,6 +5,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser, RequirePermissions } from '../../common/auth-context';
 import { P } from '../../common/permissions';
 import { OrdersService } from './orders.service';
+import { FiscalModule } from '../fiscal/fiscal';
 import {
   AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto, RenameOrderDto,
   SetBuyerDto, SetDiscountDto, SettleDto, TransferOrdersDto, UpdateItemDto, VersionDto, VoidItemDto,
@@ -104,5 +105,5 @@ export class OrdersController {
   }
 }
 
-@Module({ controllers: [OrdersController], providers: [OrdersService] })
+@Module({ imports: [FiscalModule], controllers: [OrdersController], providers: [OrdersService] })
 export class OrdersModule {}

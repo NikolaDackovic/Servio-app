@@ -12,6 +12,11 @@ import { Conflict, Invalid, NotFound } from '../../common/errors';
 import { dec, lineTotal, money, qty, sum } from '../../common/money';
 import { findOpenShift, requireDevice } from '../shifts/shifts';
 import { ensureStaffShift, requireOpenDay } from '../day/day.helpers';
+import { EventBus, RealtimeEvent } from '../../common/events';
+import { FiscalService } from '../fiscal/fiscal';
+import { routeBatch, routeVoids } from '../prep/routing';
+import { fiscalReceipts, kdsTickets, prepStations } from '../../db/schema';
+import { summary as fiscalSummary } from '../fiscal/fiscal';
 import {
   AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto,
   RenameOrderDto, SetBuyerDto, SetDiscountDto, SettleDto, TransferOrdersDto, UpdateItemDto, VoidItemDto, VersionDto,
@@ -21,7 +26,19 @@ type OrderRow = typeof orders.$inferSelect;
 
 @Injectable()
 export class OrdersService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly events: EventBus,
+    private readonly fiscal: FiscalService,
+  ) {}
+
+  /** Transakcija čiji se događaji objavljuju tek posle uspešnog commit-a. */
+  private async withEvents<T>(fn: (tx: Tx, ev: RealtimeEvent[]) => Promise<T>): Promise<T> {
+    const ev: RealtimeEvent[] = [];
+    const r = await this.db.transaction((tx) => fn(tx, ev));
+    this.events.publishAll(ev);
+    return r;
+  }
 
   // ---------- pomoćne funkcije ----------
 
@@ -113,13 +130,32 @@ export class OrdersService {
       return { label: t.label, rate: t.rate, gross: money(t.gross), tax: money(tax), net: money(t.gross.sub(tax)) };
     });
 
+    const tickets = await tx.select({ id: kdsTickets.id, stationId: kdsTickets.stationId, stationName: prepStations.name,
+      batch: kdsTickets.batch, status: kdsTickets.status, readyAt: kdsTickets.readyAt })
+      .from(kdsTickets).innerJoin(prepStations, eq(prepStations.id, kdsTickets.stationId))
+      .where(eq(kdsTickets.orderId, id)).orderBy(asc(kdsTickets.batch));
+    const stationIds = [...new Set(items.map((i) => i.prepStationId).filter((x): x is string => !!x))];
+    const stationNames = stationIds.length
+      ? new Map((await tx.select({ id: prepStations.id, name: prepStations.name }).from(prepStations)
+        .where(inArray(prepStations.id, stationIds))).map((r) => [r.id, r.name]))
+      : new Map<string, string>();
+    const [f] = await tx.select().from(fiscalReceipts)
+      .where(and(eq(fiscalReceipts.orderId, id), eq(fiscalReceipts.transactionType, 'SALE')));
+
     return {
       ...o.order,
       waiterName: o.waiterName,
+      fiscal: f ? fiscalSummary(f) : null,
+      kdsTickets: tickets,
       tableName: o.tableName,
       buyerIdLabel: o.order.buyerIdType ? BUYER_ID_TYPES.find((t) => t.code === o.order.buyerIdType)?.label ?? o.order.buyerIdType : null,
       remaining: money(dec(o.order.total).sub(dec(o.order.paidTotal))),
-      items,
+      items: items.map((i) => ({
+        ...i,
+        prepStationName: i.prepStationId ? stationNames.get(i.prepStationId) ?? null : null,
+        prepStatus: i.status === 'VOIDED' ? null : i.readyAt ? 'READY'
+          : tickets.find((t) => t.id === i.kdsTicketId)?.status ?? null,
+      })),
       payments: pays,
       taxSummary,
     };
@@ -202,7 +238,7 @@ export class OrdersService {
   }
 
   async updateItem(u: AuthUser, orderId: string, itemId: string, dto: UpdateItemDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       const [item] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
       if (!item) throw NotFound('Stavka');
@@ -224,7 +260,7 @@ export class OrdersService {
 
   /** Uklanjanje je dozvoljeno samo za NEPOSLATE stavke; poslate se isključivo storniraju. */
   async removeItem(u: AuthUser, orderId: string, itemId: string, dto: VersionDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       const [item] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
       if (!item) throw NotFound('Stavka');
@@ -244,7 +280,7 @@ export class OrdersService {
    * Iteracija 2: iz ture se prave zadaci štampe i KDS događaji (rutirani po pripremnim pozicijama).
    */
   async send(u: AuthUser, orderId: string, dto: VersionDto) {
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       const pending = await tx.select({ id: orderItems.id }).from(orderItems)
         .where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'NEW')));
@@ -256,6 +292,9 @@ export class OrdersService {
         .set({ status: 'SENT', sendBatch: batch, sentAt: new Date() })
         .where(inArray(orderItems.id, pending.map((p) => p.id))).returning();
       await tx.update(orders).set({ sendCount: batch, version: o.version + 1, updatedAt: new Date() }).where(eq(orders.id, o.id));
+      // Rutiranje po pripremnim pozicijama: KDS kartice i zadaci štampe u ISTOJ transakciji.
+      ev.push(...await routeBatch(tx, o, batch, sent));
+      ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
       await audit(tx, u, 'order.send', 'order', o.id, { batch, itemIds: sent.map((s) => s.id) });
       return { batch, sentItems: sent, order: await this.get(u, o.id, tx) };
     });
@@ -265,7 +304,7 @@ export class OrdersService {
     if (!u.permissions.includes(P.ORDER_VOID)) {
       throw Conflict('FORBIDDEN_VOID', 'Storniranje poslate stavke zahteva pravo order.void');
     }
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       const [item] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
       if (!item) throw NotFound('Stavka');
@@ -275,6 +314,8 @@ export class OrdersService {
         status: 'VOIDED', voidReason: dto.reason, voidedById: u.userId, voidedAt: new Date(),
       }).where(eq(orderItems.id, itemId));
       await this.recompute(tx, o);
+      ev.push(...await routeVoids(tx, o, [item], dto.reason, 'item'));
+      ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
       await audit(tx, u, 'order.item.void', 'order', o.id, {
         itemId, product: item.name, quantity: item.quantity, lineTotal: item.lineTotal, reason: dto.reason,
       });
@@ -325,7 +366,8 @@ export class OrdersService {
     requireDevice(u);
     if (!dto.parts.length) throw Invalid('NO_PAYMENT_PARTS', 'Nije naveden nijedan način plaćanja');
     const keyOf = (i: number) => (dto.parts.length === 1 ? dto.idempotencyKey : `${dto.idempotencyKey}#${i}`);
-    return this.db.transaction(async (tx) => {
+    let fiscalId: string | null = null;
+    const res = await this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { requireOpen: false });
 
       const replay = await tx.select().from(payments)
@@ -395,10 +437,20 @@ export class OrdersService {
         version: o.version + 1,
         updatedAt: new Date(),
       }).where(eq(orders.id, o.id));
-      if (settled) await audit(tx, u, 'order.close', 'order', o.id, { total: o.total });
+      if (settled) {
+        await audit(tx, u, 'order.close', 'order', o.id, { total: o.total });
+        // Fiskalni zahtev nastaje u istoj transakciji; šalje se provajderu posle commit-a (naplata ne zavisi od njega).
+        fiscalId = await this.fiscal.enqueueForPaidOrder(tx, { ...o, paidTotal: money(paid), status: 'PAID' });
+      }
+      ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
 
       return { payments: created, idempotentReplay: false, order: await this.get(u, o.id, tx) };
     });
+    if (fiscalId) {
+      await this.fiscal.processWithTimeout(fiscalId);
+      res.order = await this.get(u, orderId);
+    }
+    return res;
   }
 
   // ---------- popust i kupac ----------
@@ -540,7 +592,7 @@ export class OrdersService {
     if (!u.permissions.includes(P.ORDER_VOID)) {
       throw Conflict('FORBIDDEN_VOID', 'Storniranje zahteva pravo order.void');
     }
-    return this.db.transaction(async (tx) => {
+    return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
       if (!dec(o.paidTotal).isZero()) throw Conflict('ORDER_HAS_PAYMENTS', 'Račun ima naplatu — storno celog računa nije moguć');
       const sent = await tx.update(orderItems)
@@ -551,6 +603,8 @@ export class OrdersService {
         status: 'CANCELLED', subtotal: '0.00', discountTotal: '0.00', total: '0.00',
         closedAt: new Date(), closedById: u.userId, version: o.version + 1, updatedAt: new Date(),
       }).where(eq(orders.id, o.id));
+      ev.push(...await routeVoids(tx, o, sent, dto.reason, 'all'));
+      ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
       for (const i of sent) {
         await audit(tx, u, 'order.item.void', 'order', o.id, {
           itemId: i.id, product: i.name, quantity: i.quantity, lineTotal: i.lineTotal, reason: dto.reason,
