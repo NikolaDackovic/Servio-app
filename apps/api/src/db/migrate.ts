@@ -4,8 +4,10 @@ import path from 'path';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { checkDatabase } from './check';
 
 export async function runMigrations(databaseUrl: string): Promise<void> {
+  await checkDatabase(databaseUrl);
   const pool = new Pool({ connectionString: databaseUrl, max: 1 });
   try {
     await migrate(drizzle(pool), { migrationsFolder: path.resolve(__dirname, '../../migrations') });

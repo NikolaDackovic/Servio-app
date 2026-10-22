@@ -5,6 +5,7 @@ import { createApp } from '../../src/app';
 import { AppConfig } from '../../src/config';
 import { runMigrations } from '../../src/db/migrate';
 import { seed } from '../../src/db/seed';
+import { checkDatabase } from '../../src/db/check';
 
 export const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? 'postgresql://pos:pos_dev@localhost:5432/pos_test';
 const PEPPER = 'test-pin-pepper';
@@ -19,6 +20,7 @@ export interface Ctx {
 /** Svaki test fajl dobija čistu bazu: šema se briše, primenjuju se SVE migracije, pa demo seed. */
 export async function setupApp(): Promise<Ctx> {
   if (!/_test\b|_test\?/.test(TEST_DB_URL)) throw new Error('Testovi smeju da rade samo nad bazom čije ime se završava na _test');
+  await checkDatabase(TEST_DB_URL); // jedna jasna greška umesto lanca neuspeha
   const admin = new Pool({ connectionString: TEST_DB_URL, max: 1 });
   await admin.query('DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS drizzle CASCADE; CREATE SCHEMA public;');
   await admin.end();
@@ -40,7 +42,8 @@ export async function setupApp(): Promise<Ctx> {
   };
 }
 
-export async function teardown(ctx: Ctx) {
+export async function teardown(ctx: Ctx | undefined) {
+  if (!ctx) return; // setup nije uspeo — nema šta da se zatvori
   await ctx.app.close();
   await ctx.pool.end();
 }

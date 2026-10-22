@@ -2,9 +2,11 @@ import './load-env';
 import { Logger } from '@nestjs/common';
 import { loadConfig } from './config';
 import { createApp } from './app';
+import { checkDatabase } from './db/check';
 
 async function bootstrap() {
   const cfg = loadConfig();
+  await checkDatabase(cfg.databaseUrl); // bez baze API ne prijavljuje uspešan start
   const app = await createApp(cfg);
   await app.listen(cfg.port);
   Logger.log(`POS API: http://localhost:${cfg.port}/api/v1  |  Swagger: http://localhost:${cfg.port}/api/docs`, 'Bootstrap');
