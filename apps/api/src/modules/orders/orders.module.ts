@@ -1,0 +1,66 @@
+import {
+  Body, Controller, Delete, Get, HttpCode, Module, Param, ParseUUIDPipe, Patch, Post, Query,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { AuthUser, CurrentUser, RequirePermissions } from '../../common/auth-context';
+import { P } from '../../common/permissions';
+import { OrdersService } from './orders.service';
+import {
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, UpdateItemDto, VersionDto, VoidItemDto,
+} from './orders.dto';
+
+@ApiTags('orders') @ApiBearerAuth()
+@Controller('orders')
+export class OrdersController {
+  constructor(private readonly svc: OrdersService) {}
+
+  @Get() @RequirePermissions(P.ORDER_READ)
+  list(@CurrentUser() u: AuthUser, @Query() q: ListOrdersQuery) { return this.svc.list(u, q); }
+
+  @Post() @RequirePermissions(P.ORDER_WRITE)
+  create(@CurrentUser() u: AuthUser, @Body() dto: CreateOrderDto) { return this.svc.create(u, dto); }
+
+  @Get(':id') @RequirePermissions(P.ORDER_READ)
+  get(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string) { return this.svc.get(u, id); }
+
+  @Post(':id/items') @RequirePermissions(P.ORDER_WRITE)
+  addItem(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AddItemDto) {
+    return this.svc.addItem(u, id, dto);
+  }
+
+  @Patch(':id/items/:itemId') @RequirePermissions(P.ORDER_WRITE)
+  updateItem(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string, @Body() dto: UpdateItemDto) {
+    return this.svc.updateItem(u, id, itemId, dto);
+  }
+
+  @Delete(':id/items/:itemId') @RequirePermissions(P.ORDER_WRITE)
+  removeItem(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string, @Query() dto: VersionDto) {
+    return this.svc.removeItem(u, id, itemId, dto);
+  }
+
+  @Post(':id/send') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
+  send(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: VersionDto) {
+    return this.svc.send(u, id, dto);
+  }
+
+  @Post(':id/items/:itemId/void') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE, P.ORDER_VOID)
+  voidItem(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string, @Body() dto: VoidItemDto) {
+    return this.svc.voidItem(u, id, itemId, dto);
+  }
+
+  @Post(':id/cancel') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
+  cancel(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelOrderDto) {
+    return this.svc.cancel(u, id, dto);
+  }
+
+  @Post(':id/payments') @RequirePermissions(P.PAYMENT_CREATE)
+  pay(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: CreatePaymentDto) {
+    return this.svc.pay(u, id, dto);
+  }
+}
+
+@Module({ controllers: [OrdersController], providers: [OrdersService] })
+export class OrdersModule {}

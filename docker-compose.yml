@@ -1,0 +1,31 @@
+# Server deo POS-a: baza + API + web. Baza nije izložena van Docker mreže.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?postavite POSTGRES_PASSWORD u .env}
+      POSTGRES_DB: pos
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos -d pos"]
+      interval: 5s
+      retries: 10
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      DATABASE_URL: postgresql://pos:${POSTGRES_PASSWORD}@db:5432/pos
+      JWT_SECRET: ${JWT_SECRET:?postavite JWT_SECRET u .env}
+      PIN_PEPPER: ${PIN_PEPPER:?postavite PIN_PEPPER u .env}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      PAYMENT_MODE: TEST
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["${WEB_PORT:-8080}:80"]
+volumes:
+  pgdata:

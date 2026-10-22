@@ -1,0 +1,16 @@
+{
+  "name": "pos-platform",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run start:dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "test": "npm test -w apps/api",
+    "typecheck": "npm run typecheck -w apps/api && npx -w apps/web tsc --noEmit",
+    "db:migrate": "npm run db:migrate -w apps/api",
+    "db:seed": "npm run seed -w apps/api"
+  }
+}
