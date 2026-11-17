@@ -10,7 +10,8 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
   await checkDatabase(databaseUrl);
   const pool = new Pool({ connectionString: databaseUrl, max: 1 });
   try {
-    await migrate(drizzle(pool), { migrationsFolder: path.resolve(__dirname, '../../migrations') });
+    // MIGRATIONS_DIR: instalirana kasa (server spojen u jedan fajl, migracije pored njega)
+    await migrate(drizzle(pool), { migrationsFolder: process.env.MIGRATIONS_DIR ?? path.resolve(__dirname, '../../migrations') });
   } finally {
     await pool.end();
   }

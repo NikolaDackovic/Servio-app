@@ -9,7 +9,7 @@ import { DB, Db } from '../db/db.module';
 import { roles, users, devices, locations } from '../db/schema';
 import { Permission } from './permissions';
 
-/** Kontekst prijavljenog korisnika — sve poslovne operacije ga dobijaju eksplicitno. */
+/** Kontekst prijavljenog korisnika - sve poslovne operacije ga dobijaju eksplicitno. */
 export interface AuthUser {
   userId: string;
   fullName: string;

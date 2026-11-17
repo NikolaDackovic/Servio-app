@@ -1,5 +1,5 @@
 /**
- * POS platforma — šema baze (iteracija 1).
+ * POS platforma - šema baze (iteracija 1).
  *
  * Pravila integriteta:
  *  - Novčani iznosi: numeric(14,2). Količine: numeric(12,3). Poreske stope: numeric(5,2).
@@ -24,7 +24,7 @@ export const deviceKind = pgEnum('device_kind', ['POS', 'MOBILE', 'KDS', 'BRIDGE
 export const stationKind = pgEnum('station_kind', ['BAR', 'KITCHEN', 'OTHER']);
 export const printerConnection = pgEnum('printer_connection', ['SIMULATED', 'NETWORK_ESCPOS', 'WINDOWS_RAW']);
 export const kdsTicketStatus = pgEnum('kds_ticket_status', ['NEW', 'IN_PROGRESS', 'READY', 'DONE']);
-export const printJobKind = pgEnum('print_job_kind', ['ORDER_TICKET', 'VOID_TICKET', 'RECEIPT', 'TEST_PAGE']);
+export const printJobKind = pgEnum('print_job_kind', ['ORDER_TICKET', 'VOID_TICKET', 'RECEIPT', 'TEST_PAGE', 'SHIFT_REPORT']);
 export const printJobStatus = pgEnum('print_job_status', ['PENDING', 'PRINTING', 'PRINTED', 'SIMULATED', 'FAILED']);
 export const fiscalStatus = pgEnum('fiscal_status', ['PENDING', 'SIGNED', 'FAILED', 'NOT_REQUIRED']);
 export const orderStatus = pgEnum('order_status', ['OPEN', 'PAID', 'CANCELLED', 'MERGED']);
@@ -53,6 +53,8 @@ export const locations = pgTable('locations', {
   name: text('name').notNull(),
   address: text('address'),
   timezone: text('timezone').notNull().default('Europe/Belgrade'),
+  /** Podešavanja kase za lokal (ADMIN → Podešavanja), npr. { pinPerTable: true }. */
+  settings: jsonb('settings').$type<Record<string, unknown>>().notNull().default({}),
   createdAt: ts('created_at').notNull().defaultNow(),
   updatedAt: ts('updated_at').notNull().defaultNow(),
 }, (t) => [index('locations_org_idx').on(t.organizationId)]);
@@ -69,6 +71,10 @@ export const devices = pgTable('devices', {
   lastSeenAt: ts('last_seen_at'),
   /** Štampač za račune ove kase. */
   receiptPrinterId: uuid('receipt_printer_id'),
+  /** Aktivni cenovnik kase ("Postavi cenovnik"); null = osnovne cene proizvoda. */
+  priceListId: uuid('price_list_id'),
+  /** Podešavanja ovog računara (ADMIN → Podešavanja → Računari): skrivene grupe, prikaz funkcija. */
+  settings: jsonb('settings').notNull().default(sql`'{}'::jsonb`),
   createdAt: ts('created_at').notNull().defaultNow(),
 }, (t) => [uniqueIndex('devices_location_name_uq').on(t.locationId, t.name)]);
 
@@ -89,16 +95,23 @@ export const users = pgTable('users', {
   organizationId: uuid('organization_id').notNull().references(() => organizations.id),
   roleId: uuid('role_id').notNull().references(() => roles.id),
   fullName: text('full_name').notNull(),
+  firstName: text('first_name').notNull().default(''),
+  lastName: text('last_name').notNull().default(''),
+  /** Korisničko ime za prijavu u ADMIN (uz email); jedinstveno u organizaciji, mala slova. */
+  username: varchar('username', { length: 40 }),
   email: text('email'),
   passwordHash: text('password_hash'),
   pinHash: text('pin_hash'),
-  /** HMAC(pin, PIN_PEPPER) — omogućava pronalaženje korisnika po PIN-u i jedinstvenost bez čuvanja PIN-a. */
+  /** HMAC(pin, PIN_PEPPER) - omogućava pronalaženje korisnika po PIN-u i jedinstvenost bez čuvanja PIN-a. */
   pinLookup: text('pin_lookup'),
+  /** HMAC("card:" + broj kartice) - prijava prislanjanjem kartice na čitač (radi kao PIN); broj se ne čuva. */
+  cardLookup: text('card_lookup'),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
   updatedAt: ts('updated_at').notNull().defaultNow(),
 }, (t) => [
   uniqueIndex('users_org_email_uq').on(t.organizationId, t.email),
+  uniqueIndex('users_org_username_uq').on(t.organizationId, t.username),
   uniqueIndex('users_org_pin_uq').on(t.organizationId, t.pinLookup),
 ]);
 
@@ -124,6 +137,10 @@ export const categories = pgTable('categories', {
   sortOrder: integer('sort_order').notNull().default(0),
   /** Podrazumevana pripremna pozicija za artikle kategorije (šank, kuhinja…). */
   prepStationId: uuid('prep_station_id'),
+  /** Štampač grupe za porudžbine (ADMIN → Štampanje); ako nije zadat, štampa se na štampač kategorije (pozicije). */
+  printerId: uuid('printer_id'),
+  /** Grupa za prodaju (vidi se na kasi i u QR meniju); false = grupa sirovina / troška (npr. "Sirovine voće"). */
+  forSale: boolean('for_sale').notNull().default(true),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
   updatedAt: ts('updated_at').notNull().defaultNow(),
@@ -134,18 +151,24 @@ export const products = pgTable('products', {
   organizationId: uuid('organization_id').notNull().references(() => organizations.id),
   categoryId: uuid('category_id').notNull().references(() => categories.id),
   taxRateId: uuid('tax_rate_id').notNull().references(() => taxRates.id),
+  /** Ulazni PDV (nabavka); izlazni je taxRateId. */
+  purchaseTaxRateId: uuid('purchase_tax_rate_id'),
+  /** Minimalna zaliha: ispod nje se proizvod crveni u Zalihama (za poručivanje). */
+  minStock: numeric('min_stock', { precision: 16, scale: 4 }),
   code: varchar('code', { length: 32 }).notNull(),
   barcode: varchar('barcode', { length: 32 }),
   name: text('name').notNull(),
   unit: varchar('unit', { length: 12 }).notNull().default('kom'),
   price: money('price').notNull(),
   color: varchar('color', { length: 16 }),
-  /** Pripremna pozicija artikla — ima prednost nad pozicijom kategorije. */
+  /** Pripremna pozicija artikla - ima prednost nad pozicijom kategorije. */
   prepStationId: uuid('prep_station_id'),
   /** Vodi se zaliha (lager) za ovaj artikal: prodaja ga troši (ako nema normativ), dokumenti ga menjaju. */
   trackStock: boolean('track_stock').notNull().default(false),
   /** Prodaje se na kasi. Sirovine (npr. kafa u zrnu) imaju false i ne prikazuju se na kasi. */
   isSellable: boolean('is_sellable').notNull().default(true),
+  /** Izmene koje se nude na kasi čim se artikal otkuca (npr. "bez leda", "bez voća"); izabrane idu u napomenu stavke. */
+  noteOptions: jsonb('note_options').$type<string[]>().notNull().default([]),
   sortOrder: integer('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
@@ -155,6 +178,14 @@ export const products = pgTable('products', {
   index('products_org_category_idx').on(t.organizationId, t.categoryId),
   check('products_price_nonneg', sql`${t.price} >= 0`),
 ]);
+
+/** Slika artikla za pločicu na kasi (umanjena u pregledaču pre slanja, base64). Odvojeno da lista artikala ostane lagana. */
+export const productImages = pgTable('product_images', {
+  productId: uuid('product_id').primaryKey().references(() => products.id),
+  mime: varchar('mime', { length: 32 }).notNull(),
+  data: text('data').notNull(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+}, (t) => [check('product_images_mime', sql`${t.mime} IN ('image/png', 'image/jpeg', 'image/webp')`)]);
 
 export const productPriceChanges = pgTable('product_price_changes', {
   id: id(),
@@ -171,6 +202,9 @@ export const discounts = pgTable('discounts', {
   organizationId: uuid('organization_id').notNull().references(() => organizations.id),
   name: text('name').notNull(),
   percent: numeric('percent', { precision: 5, scale: 2 }).notNull(),
+  /** Na šta se popust odnosi: ceo račun, izabrane grupe ili izabrani proizvodi (targetIds). */
+  scope: text('scope').notNull().default('ALL'),
+  targetIds: uuid('target_ids').array().notNull().default(sql`'{}'::uuid[]`),
   sortOrder: integer('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
@@ -178,6 +212,7 @@ export const discounts = pgTable('discounts', {
 }, (t) => [
   uniqueIndex('discounts_org_name_uq').on(t.organizationId, t.name),
   check('discounts_percent_range', sql`${t.percent} > 0 AND ${t.percent} <= 100`),
+  check('discounts_scope', sql`${t.scope} IN ('ALL', 'GROUP', 'PRODUCT') AND (${t.scope} = 'ALL' OR cardinality(${t.targetIds}) > 0)`),
 ]);
 
 // ---------- Sala ----------
@@ -190,8 +225,22 @@ export const diningTables = pgTable('dining_tables', {
   seats: integer('seats').notNull().default(4),
   posX: integer('pos_x').notNull().default(0),
   posY: integer('pos_y').notNull().default(0),
+  /** Veličina pločice na mapi (u jedinicama mape) i oblik - uređuje se u ADMIN-u (mapa stolova). */
+  width: integer('width').notNull().default(110),
+  height: integer('height').notNull().default(90),
+  shape: varchar('shape', { length: 8 }).notNull().default('RECT'),
+  /** Boja stola na mapi (ADMIN → Mape stolova); null = podrazumevana. */
+  color: varchar('color', { length: 16 }),
+  /** Hotelska soba: račun može ostati otvoren preko zatvaranja dana (naplata pri odjavi gosta). */
+  isRoom: boolean('is_room').notNull().default(false),
+  /** Nasumičan token za QR kod na stolu (gost naručuje sa telefona); novi token poništava stari QR. */
+  qrToken: varchar('qr_token', { length: 24 }).notNull().default(sql`substr(md5(random()::text || clock_timestamp()::text), 1, 20)`),
   active: boolean('active').notNull().default(true),
-}, (t) => [uniqueIndex('tables_location_name_uq').on(t.locationId, t.name)]);
+}, (t) => [
+  uniqueIndex('tables_location_name_uq').on(t.locationId, t.name),
+  check('tables_shape_valid', sql`${t.shape} IN ('RECT', 'ROUND')`),
+  check('tables_size_range', sql`${t.width} BETWEEN 40 AND 600 AND ${t.height} BETWEEN 40 AND 600`),
+]);
 
 // ---------- Poslovni dan ----------
 
@@ -203,6 +252,8 @@ export const businessDays = pgTable('business_days', {
   id: id(),
   locationId: uuid('location_id').notNull().references(() => locations.id),
   date: date('date', { mode: 'string' }).notNull(),
+  /** Naziv smene (dana), npr. "Ponedeljak"; isti datum može imati više smena ("Ponedeljak1"). */
+  name: text('name').notNull().default(''),
   status: businessDayStatus('status').notNull().default('OPEN'),
   openedById: uuid('opened_by_id').notNull().references(() => users.id),
   closedById: uuid('closed_by_id').references(() => users.id),
@@ -210,7 +261,7 @@ export const businessDays = pgTable('business_days', {
   closedAt: ts('closed_at'),
   summary: jsonb('summary'),
 }, (t) => [
-  uniqueIndex('business_days_location_date_uq').on(t.locationId, t.date),
+  uniqueIndex('business_days_location_date_name_uq').on(t.locationId, t.date, t.name),
   uniqueIndex('business_days_one_open_uq').on(t.locationId).where(sql`${t.status} = 'OPEN'`),
   check('business_days_closed_consistent', sql`${t.status} <> 'CLOSED' OR (${t.closedAt} IS NOT NULL AND ${t.closedById} IS NOT NULL)`),
 ]);
@@ -252,7 +303,7 @@ export const cashShifts = pgTable('cash_shifts', {
   closedAt: ts('closed_at'),
 }, (t) => [
   index('shifts_device_status_idx').on(t.deviceId, t.status),
-  // Najviše jedna otvorena smena po kasi — garantuje baza, ne samo kod.
+  // Najviše jedna otvorena smena po kasi - garantuje baza, ne samo kod.
   uniqueIndex('shifts_one_open_per_device_uq').on(t.deviceId).where(sql`${t.status} = 'OPEN'`),
   check('shifts_opening_cash_nonneg', sql`${t.openingCash} >= 0`),
 ]);
@@ -289,7 +340,7 @@ export const orders = pgTable('orders', {
   /** Identifikacija kupca (šifra vrste ID-a iz šifarnika eFiskalizacije + broj). */
   buyerIdType: varchar('buyer_id_type', { length: 4 }),
   buyerId: varchar('buyer_id', { length: 40 }),
-  /** Opciono polje kupca: osnov (npr. oslobođenje od PDV-a) i broj — mapiranje na šifre pre fiskalizacije. */
+  /** Opciono polje kupca: osnov (npr. oslobođenje od PDV-a) i broj - mapiranje na šifre pre fiskalizacije. */
   buyerOptionalBasis: varchar('buyer_optional_basis', { length: 60 }),
   buyerOptionalValue: varchar('buyer_optional_value', { length: 60 }),
   mergedIntoId: uuid('merged_into_id'),
@@ -365,6 +416,8 @@ export const payments = pgTable('payments', {
   amount: money('amount').notNull(),
   tendered: money('tendered'),
   change: money('change').notNull().default('0'),
+  /** Reprezentacija: razlog (Čast kuće, Osoblje, Reprezentacija) - štampa se na računu. */
+  note: varchar('note', { length: 60 }),
   idempotencyKey: varchar('idempotency_key', { length: 80 }).notNull(),
   createdById: uuid('created_by_id').notNull().references(() => users.id),
   createdAt: ts('created_at').notNull().defaultNow(),
@@ -375,6 +428,43 @@ export const payments = pgTable('payments', {
   index('payments_business_day_idx').on(t.businessDayId),
   check('payments_amount_pos', sql`${t.amount} > 0`),
   check('payments_change_nonneg', sql`${t.change} >= 0`),
+]);
+
+/**
+ * Povraćaj novca (refundacija) naplaćenog računa: ceo račun ili deo stavki, više puta do prodate količine.
+ * Novac: gotovinski povraćaj je i isplata iz blagajne (cash_movements PAY_OUT); roba se vraća na lager; fiskalno REFUND.
+ */
+export const refunds = pgTable('refunds', {
+  id: id(),
+  locationId: uuid('location_id').notNull().references(() => locations.id),
+  orderId: uuid('order_id').notNull().references(() => orders.id),
+  businessDayId: uuid('business_day_id').references(() => businessDays.id),
+  shiftId: uuid('shift_id').references(() => cashShifts.id),
+  deviceId: uuid('device_id').references(() => devices.id),
+  number: integer('number').notNull(),
+  method: paymentMethod('method').notNull(),
+  total: money('total').notNull(),
+  reason: text('reason').notNull(),
+  idempotencyKey: varchar('idempotency_key', { length: 80 }).notNull(),
+  createdById: uuid('created_by_id').notNull().references(() => users.id),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('refunds_order_idem_uq').on(t.orderId, t.idempotencyKey),
+  index('refunds_order_idx').on(t.orderId),
+  index('refunds_business_day_idx').on(t.businessDayId),
+  check('refunds_total_pos', sql`${t.total} > 0`),
+]);
+
+export const refundItems = pgTable('refund_items', {
+  id: id(),
+  refundId: uuid('refund_id').notNull().references(() => refunds.id, { onDelete: 'cascade' }),
+  orderItemId: uuid('order_item_id').notNull().references(() => orderItems.id),
+  quantity: qty('quantity').notNull(),
+  /** Iznos povraćaja za ovu stavku (posle popusta). */
+  amount: money('amount').notNull(),
+}, (t) => [
+  index('refund_items_item_idx').on(t.orderItemId),
+  check('refund_items_qty_pos', sql`${t.quantity} > 0`),
 ]);
 
 // ---------- Numeracija i revizijski trag ----------
@@ -413,6 +503,8 @@ export const printers = pgTable('printers', {
   /** WINDOWS_RAW: tačan naziv štampača u Windowsu */
   windowsName: text('windows_name'),
   paperWidth: integer('paper_width').notNull().default(80),
+  /** Računar (njegov Print Bridge) na koji je štampač priključen; null = bilo koji (mrežni štampač). */
+  bridgeDeviceId: uuid('bridge_device_id').references(() => devices.id),
   active: boolean('active').notNull().default(true),
   createdAt: ts('created_at').notNull().defaultNow(),
 }, (t) => [
@@ -426,6 +518,8 @@ export const prepStations = pgTable('prep_stations', {
   id: id(),
   locationId: uuid('location_id').notNull().references(() => locations.id),
   name: text('name').notNull(),
+  /** Redosled na kasi (Šank pa Kuhinja…) - dugmad kategorija i artikli na SVE idu ovim redom. */
+  sortOrder: integer('sort_order').notNull().default(0),
   kind: stationKind('kind').notNull().default('OTHER'),
   printerId: uuid('printer_id').references(() => printers.id),
   /** Da li se pozicija prikazuje na KDS ekranu */
@@ -488,6 +582,8 @@ export const fiscalReceipts = pgTable('fiscal_receipts', {
   provider: varchar('provider', { length: 32 }).notNull(),
   /** Vrsta transakcije: SALE / REFUND; vrsta računa: NORMAL / TRAINING (testni) */
   transactionType: varchar('transaction_type', { length: 12 }).notNull().default('SALE'),
+  /** Za REFUND: povraćaj na koji se odnosi. */
+  refundId: uuid('refund_id').references(() => refunds.id),
   invoiceType: varchar('invoice_type', { length: 12 }).notNull(),
   status: fiscalStatus('status').notNull().default('PENDING'),
   request: jsonb('request').notNull(),
@@ -500,7 +596,9 @@ export const fiscalReceipts = pgTable('fiscal_receipts', {
   signedAt: ts('signed_at'),
   createdAt: ts('created_at').notNull().defaultNow(),
 }, (t) => [
-  uniqueIndex('fiscal_order_tx_uq').on(t.orderId, t.transactionType),
+  /** Jedan fiskalni račun prodaje po porudžbini; refundacija ima svoj (po povraćaju). */
+  uniqueIndex('fiscal_order_sale_uq').on(t.orderId).where(sql`${t.transactionType} = 'SALE'`),
+  uniqueIndex('fiscal_refund_uq').on(t.refundId),
   index('fiscal_queue_idx').on(t.status, t.nextAttemptAt),
   check('fiscal_signed_has_number', sql`${t.status} <> 'SIGNED' OR (${t.invoiceNumber} IS NOT NULL AND ${t.signedAt} IS NOT NULL)`),
 ]);
@@ -512,9 +610,9 @@ const sqty = (name: string) => numeric(name, { precision: 16, scale: 4 });
 const cost = (name: string) => numeric(name, { precision: 16, scale: 4 });
 
 export const partnerKind = pgEnum('partner_kind', ['SUPPLIER', 'CUSTOMER', 'BOTH']);
-export const stockDocKind = pgEnum('stock_doc_kind', ['RECEIPT', 'ISSUE', 'RETURN', 'TRANSFER', 'WRITE_OFF', 'INTERNAL', 'STOCKTAKE']);
+export const stockDocKind = pgEnum('stock_doc_kind', ['RECEIPT', 'ISSUE', 'RETURN', 'TRANSFER', 'WRITE_OFF', 'INTERNAL', 'STOCKTAKE', 'RECEIPT_NOTE', 'CORRECTION']);
 export const stockDocStatus = pgEnum('stock_doc_status', ['DRAFT', 'POSTED', 'CANCELLED']);
-export const movementSource = pgEnum('movement_source', ['DOCUMENT', 'SALE', 'REVERSAL']);
+export const movementSource = pgEnum('movement_source', ['DOCUMENT', 'SALE', 'REVERSAL', 'REFUND']);
 export const recipeStatus = pgEnum('recipe_status', ['DRAFT', 'ACTIVE', 'RETIRED']);
 
 export const partners = pgTable('partners', {
@@ -574,6 +672,9 @@ export const stockDocuments = pgTable('stock_documents', {
   docDate: date('doc_date').notNull(),
   externalNumber: varchar('external_number', { length: 60 }),
   note: text('note'),
+  /** Datum valute (rok plaćanja) i interna napomena (ne štampa se). */
+  dueDate: date('due_date'),
+  internalNote: text('internal_note'),
   version: integer('version').notNull().default(0),
   createdById: uuid('created_by_id').notNull().references(() => users.id),
   postedById: uuid('posted_by_id').references(() => users.id),
@@ -600,12 +701,13 @@ export const stockDocumentLines = pgTable('stock_document_lines', {
   unitCost: cost('unit_cost'),
   /** Popis: knjižno stanje u trenutku knjiženja (snimak). */
   bookQuantity: sqty('book_quantity'),
+  /** Rabat sa fakture (%) - samo za prikaz; unit_cost je već posle rabata. */
+  discountPercent: numeric('discount_percent', { precision: 5, scale: 2 }),
   note: text('note'),
   sortOrder: integer('sort_order').notNull().default(0),
 }, (t) => [
   index('stock_document_lines_doc_idx').on(t.documentId),
   uniqueIndex('stock_document_lines_doc_product_uq').on(t.documentId, t.productId),
-  check('stock_document_lines_qty_nonneg', sql`${t.quantity} >= 0`),
   check('stock_document_lines_cost_nonneg', sql`${t.unitCost} IS NULL OR ${t.unitCost} >= 0`),
 ]);
 
@@ -636,12 +738,12 @@ export const recipeLines = pgTable('recipe_lines', {
 ]);
 
 /**
- * Kartica artikla: svako kretanje zalihe. Nikad se ne briše ni menja — storno je novo, suprotno kretanje.
+ * Kartica artikla: svako kretanje zalihe. Nikad se ne briše ni menja - storno je novo, suprotno kretanje.
  * balanceAfter/avgCostAfter = stanje posle ovog kretanja (redosled je serijalizovan zaključavanjem stanja).
  */
 export const stockMovements = pgTable('stock_movements', {
   id: id(),
-  /** Redosled upisa (unutar iste transakcije svi redovi imaju isto vreme) — kartica se sortira po njemu. */
+  /** Redosled upisa (unutar iste transakcije svi redovi imaju isto vreme) - kartica se sortira po njemu. */
   seq: bigserial('seq', { mode: 'number' }).notNull(),
   locationId: uuid('location_id').notNull().references(() => locations.id),
   warehouseId: uuid('warehouse_id').notNull().references(() => warehouses.id),
@@ -658,6 +760,8 @@ export const stockMovements = pgTable('stock_movements', {
   orderItemId: uuid('order_item_id').references(() => orderItems.id),
   recipeId: uuid('recipe_id').references(() => recipes.id),
   reversesMovementId: uuid('reverses_movement_id'),
+  /** Povraćaj robe pri refundaciji računa. */
+  refundId: uuid('refund_id').references(() => refunds.id),
   createdById: uuid('created_by_id').references(() => users.id),
   createdAt: ts('created_at').notNull().defaultNow(),
 }, (t) => [
@@ -670,4 +774,49 @@ export const stockMovements = pgTable('stock_movements', {
   /** Svako kretanje se stornira najviše jednom. */
   uniqueIndex('stock_movements_reversal_uq').on(t.reversesMovementId).where(sql`${t.reversesMovementId} IS NOT NULL`),
   check('stock_movements_qty_nonzero', sql`${t.quantity} <> 0`),
+]);
+
+// ---------- Cenovnici i Happy hour ----------
+
+/** Cenovnik: iste stavke kao proizvodi, druge cene (npr. Nova godina, Dostava). Kasa ga bira dugmetom "Postavi cenovnik". */
+export const priceLists = pgTable('price_lists', {
+  id: id(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id),
+  name: text('name').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+}, (t) => [uniqueIndex('price_lists_org_name_uq').on(t.organizationId, t.name)]);
+
+/** Stavka cenovnika; proizvod koji nije u cenovniku nije dostupan na kasi dok je taj cenovnik postavljen. */
+export const priceListItems = pgTable('price_list_items', {
+  priceListId: uuid('price_list_id').notNull().references(() => priceLists.id, { onDelete: 'cascade' }),
+  productId: uuid('product_id').notNull().references(() => products.id),
+  price: money('price').notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.priceListId, t.productId] }),
+  check('price_list_items_price_nonneg', sql`${t.price} >= 0`),
+]);
+
+/** Happy hour: od-do datum, u vremenu od-do (opciono dani u nedelji), za grupu ili proizvod: nova cena ili popust %. */
+export const happyHours = pgTable('happy_hours', {
+  id: id(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id),
+  name: text('name').notNull(),
+  dateFrom: date('date_from', { mode: 'string' }).notNull(),
+  dateTo: date('date_to', { mode: 'string' }).notNull(),
+  timeFrom: varchar('time_from', { length: 5 }).notNull(),
+  timeTo: varchar('time_to', { length: 5 }).notNull(),
+  /** 0 = nedelja … 6 = subota; prazno = svaki dan. */
+  weekdays: integer('weekdays').array().notNull().default(sql`'{}'::int[]`),
+  categoryId: uuid('category_id').references(() => categories.id),
+  productId: uuid('product_id').references(() => products.id),
+  kind: varchar('kind', { length: 8 }).notNull().default('PRICE'),
+  value: numeric('value', { precision: 14, scale: 2 }).notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+}, (t) => [
+  check('happy_hours_kind', sql`${t.kind} IN ('PRICE', 'PERCENT')`),
+  check('happy_hours_target', sql`${t.categoryId} IS NOT NULL OR ${t.productId} IS NOT NULL`),
+  check('happy_hours_value', sql`${t.value} >= 0 AND (${t.kind} <> 'PERCENT' OR ${t.value} <= 100)`),
 ]);

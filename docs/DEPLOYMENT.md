@@ -77,7 +77,7 @@ Preporuka: dnevni automatski backup (cron / Windows Task Scheduler) + kopija van
 | `PORT` | Podrazumevano 3000 |
 | `CORS_ORIGIN` | Dozvoljeni origin-i, zarezom odvojeni |
 | `PAYMENT_MODE` | Samo `TEST` je podržan; `LIVE` se namerno odbija pri startu |
-| `FISCAL_PROVIDER` | `TEST` (podrazumevano; računi jasno označeni kao NE-fiskalni) ili `NONE`. Stvarni provajder ne postoji |
+| `FISCAL_PROVIDER` | `TEST` (podrazumevano: fiskalni red radi; pravi računi LPFR/VPFR se uključuju u ADMIN-u) ili `NONE` (fiskalni red isključen) |
 | `FISCAL_WORKER_INTERVAL_MS` | Interval ponovnih fiskalnih pokušaja (podrazumevano 5000) |
 
 Ako baza nije dostupna, API se ne pokreće i ispisuje jasnu poruku; `/api/v1/health` vraća 503 kada se veza izgubi.

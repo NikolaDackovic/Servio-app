@@ -1,9 +1,15 @@
 {
-  "name": "POS kasa",
-  "short_name": "POS",
+  "name": "Servio",
+  "short_name": "Servio",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#14181f",
   "theme_color": "#14181f",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "icons": [
+    {
+      "src": "/servio-s.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }

@@ -33,7 +33,7 @@ export function Shift() {
     } catch (e: any) { toast('err', e.message); } finally { setBusy(false); }
   };
 
-  const titles = { open: 'Otvaranje kase — početna gotovina', close: 'Zatvaranje kase — prebrojana gotovina', PAY_IN: 'Uplata u blagajnu', PAY_OUT: 'Isplata iz blagajne' };
+  const titles = { open: 'Otvaranje kase - početna gotovina', close: 'Zatvaranje kase - prebrojana gotovina', PAY_IN: 'Uplata u blagajnu', PAY_OUT: 'Isplata iz blagajne' };
 
   return (
     <div className="page narrow">

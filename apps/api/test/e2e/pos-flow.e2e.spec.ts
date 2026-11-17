@@ -24,7 +24,7 @@ const api = (path: string) => `/api/v1${path}`;
 
 describe('Autentifikacija i prava', () => {
   it('odbija pogrešan PIN, pogrešnu lozinku i zahtev bez tokena', async () => {
-    await ctx.http().post(api('/auth/pin')).send({ deviceId: ctx.ids.posDevice, pin: '0000' }).expect(401);
+    await ctx.http().post(api('/auth/pin')).send({ deviceId: ctx.ids.posDevice, pin: '5555' }).expect(401);
     await ctx.http().post(api('/auth/login')).send({ email: 'admin@demo.local', password: 'pogresno' }).expect(401);
     const r = await ctx.http().get(api('/orders')).expect(401);
     expect(r.body.error.code).toBe('UNAUTHORIZED');
@@ -56,7 +56,7 @@ describe('Autentifikacija i prava', () => {
   });
 });
 
-describe('Scenario A — prodaja u kafiću', () => {
+describe('Scenario A - prodaja u kafiću', () => {
   let orderId: string;
   let shiftOpened = false;
 

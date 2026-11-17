@@ -83,7 +83,7 @@ export class PrintBridge {
           ? { status: 'FAILED', error: out.error.slice(0, 500), retryable: out.retryable } : { status: out.status });
       } catch (e: any) {
         // Rezultat nije zabeležen: server će posle isteka zakupa ponovo dati zadatak (moguća dupla štampa
-        // je manje zlo od izgubljenog bloka — ESC/POS ne omogućava proveru šta je već odštampano).
+        // je manje zlo od izgubljenog bloka - ESC/POS ne omogućava proveru šta je već odštampano).
         this.log(`Rezultat za ${job.id.slice(0, 8)} nije poslat: ${e.message}`);
       }
     }
@@ -97,7 +97,7 @@ export class PrintBridge {
       try {
         const n = await this.tick();
         this.backoffMs = 0;
-        if (n > 0) delay = 50; // ima još posla — odmah sledeći krug
+        if (n > 0) delay = 50; // ima još posla - odmah sledeći krug
       } catch (e: any) {
         this.stats.apiErrors++;
         if (e instanceof ApiError && e.status === 401) {

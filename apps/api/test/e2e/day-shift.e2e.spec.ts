@@ -1,6 +1,6 @@
 /**
  * Poslovni dan, smena konobara, prebacivanje računa, istorija računa, zaključak dana, kalendar.
- * Pravi PostgreSQL, pravi HTTP — bez mock-ova.
+ * Pravi PostgreSQL, pravi HTTP - bez mock-ova.
  */
 import { Ctx, auth, idem, passwordLogin, pinLogin, productId, setupApp, teardown, today } from './setup';
 
@@ -159,8 +159,12 @@ describe('Zaključak dana i kalendar', () => {
     expect(byDate.body.sales.gross).toBe('1400.00');
   });
 
-  it('novi dan mora biti posle poslednjeg', async () => {
-    const r = await ctx.http().post(api('/business-days/open')).set(auth(cashier)).send({ date: today() }).expect(422);
+  it('smena istog datuma traži drugi naziv (Petak1); raniji datum nije dozvoljen', async () => {
+    const same = await ctx.http().post(api('/business-days/open')).set(auth(cashier)).send({ date: today() }).expect(409);
+    expect(same.body.error.code).toBe('DAY_NAME_TAKEN');
+    expect(same.body.error.details.suggested).toMatch(/1$/);
+    const prev = new Date(Date.parse(today() + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
+    const r = await ctx.http().post(api('/business-days/open')).set(auth(cashier)).send({ date: prev }).expect(422);
     expect(r.body.error.code).toBe('DAY_DATE_NOT_AFTER_LAST');
     const next = new Date(Date.parse(today() + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10);
     const d = await ctx.http().post(api('/business-days/open')).set(auth(cashier)).send({ date: next }).expect(201);

@@ -35,6 +35,8 @@ export class UpdateItemDto extends VersionDto {
 }
 
 export class VoidItemDto extends VersionDto {
+  /** Delimični storno: koliko od stavke (podrazumevano cela stavka). */
+  @IsOptional() @Matches(QTY_RE) quantity?: string;
   @IsString() @Length(3, 200) reason: string;
 }
 
@@ -44,12 +46,12 @@ export class CancelOrderDto extends VersionDto {
 
 export class CreatePaymentDto {
   @IsIn(['CASH', 'CARD', 'TRANSFER', 'REPRESENTATION']) method: PaymentMethodCode;
-  /** Iznos koji se primenjuje na račun; ako se izostavi — ceo preostali dug. */
+  /** Iznos koji se primenjuje na račun; ako se izostavi - ceo preostali dug. */
   @IsOptional() @Matches(AMOUNT_RE) amount?: string;
   /** Samo za gotovinu: primljeno od gosta (za obračun kusura). */
   @IsOptional() @Matches(AMOUNT_RE) tendered?: string;
   /** Obavezan: klijent ga generiše jednom po pokušaju naplate i ponavlja ga pri retry-ju. */
-  @Matches(IDEM_RE, { message: 'idempotencyKey: 8–80 znakova [A-Za-z0-9._:-]' }) idempotencyKey: string;
+  @Matches(IDEM_RE, { message: 'idempotencyKey: 8-80 znakova [A-Za-z0-9._:-]' }) idempotencyKey: string;
   @IsOptional() @IsInt() @Min(0) expectedVersion?: number;
 }
 
@@ -59,8 +61,14 @@ export class ListOrdersQuery {
   @IsOptional() @IsUUID() businessDayId?: string;
   @IsOptional() @IsUUID() waiterId?: string;
   @IsOptional() @ToBool() @IsBoolean() mine?: boolean;
+  /** Samo računi koji imaju bar jednu stavku (prazni - otvoren pa napušten sto - se ne prikazuju). */
+  @IsOptional() @ToBool() @IsBoolean() nonEmpty?: boolean;
+  /** Datum smene (YYYY-MM-DD): svi računi smena tog datuma (Ponedeljak, Ponedeljak1…). */
+  @IsOptional() @Matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) date?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) pageSize?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(5000) pageSize?: number;
+  /** Više smena odjednom (ADMIN pretraga računa: od početne do završne smene), id-jevi odvojeni zarezom. */
+  @IsOptional() @Matches(/^[0-9a-f-]{36}(,[0-9a-f-]{36}){0,400}$/) dayIds?: string;
 }
 
 export class TransferOrdersDto {
@@ -72,11 +80,13 @@ export class PaymentPartDto {
   @IsIn(['CASH', 'CARD', 'TRANSFER', 'REPRESENTATION']) method: PaymentMethodCode;
   @IsOptional() @Matches(AMOUNT_RE) amount?: string;
   @IsOptional() @Matches(AMOUNT_RE) tendered?: string;
+  /** Samo reprezentacija: razlog (npr. Čast kuće, Osoblje) - štampa se na računu. */
+  @IsOptional() @IsString() @Length(1, 60) note?: string;
 }
 
 export class SettleDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(4) @ValidateNested({ each: true }) @Type(() => PaymentPartDto) parts: PaymentPartDto[];
-  @Matches(IDEM_RE, { message: 'idempotencyKey: 8–80 znakova [A-Za-z0-9._:-]' }) idempotencyKey: string;
+  @Matches(IDEM_RE, { message: 'idempotencyKey: 8-80 znakova [A-Za-z0-9._:-]' }) idempotencyKey: string;
   @IsOptional() @IsInt() @Min(0) expectedVersion?: number;
 }
 
@@ -99,6 +109,8 @@ export class RenameOrderDto {
 
 export class MoveItemsDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(200) @IsUUID('all', { each: true }) itemIds: string[];
+  /** Delimično prebacivanje: količina za svaku stavku istim redom kao itemIds (podrazumevano cele stavke). */
+  @IsOptional() @IsArray() @Matches(QTY_RE, { each: true }) quantities?: string[];
   /** Postojeći otvoreni račun (tura) */
   @IsOptional() @IsUUID() toOrderId?: string;
   /** Ili: nova tura na ovom stolu (podrazumevano isti sto kao izvor) */
@@ -108,4 +120,8 @@ export class MoveItemsDto {
 
 export class MergeOrdersDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @IsUUID('all', { each: true }) fromOrderIds: string[];
+}
+
+export class MoveTableDto extends VersionDto {
+  @IsUUID() toTableId: string;
 }

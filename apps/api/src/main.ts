@@ -10,7 +10,7 @@ async function bootstrap() {
   const app = await createApp(cfg);
   await app.listen(cfg.port);
   Logger.log(`POS API: http://localhost:${cfg.port}/api/v1  |  Swagger: http://localhost:${cfg.port}/api/docs`, 'Bootstrap');
-  Logger.warn(`Režim naplate: TEST (nema platnog terminala). Fiskalizacija: ${cfg.fiscalProvider === 'TEST' ? 'TEST adapter — računi NISU fiskalni' : 'isključena'}`, 'Bootstrap');
+  Logger.warn(`Režim naplate: TEST (nema platnog terminala). Fiskalizacija: ${cfg.fiscalProvider === 'TEST' ? 'TEST adapter - računi NISU fiskalni' : 'isključena'}`, 'Bootstrap');
 }
 
 bootstrap().catch((e) => {

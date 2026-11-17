@@ -1,37 +1,33 @@
 import { FormEvent, useState } from 'react';
 import { api } from '@shared/api';
-import { Empty, ErrorBox, Modal, Spinner, useLoad, useToast } from '@shared/ui';
+import { ErrorBox, Modal, Spinner, useLoad, useToast } from '@shared/ui';
 import { Partner } from './stockShared';
+import { Column, DataTable } from './DataTable';
 
 const KIND: Record<Partner['kind'], string> = { SUPPLIER: 'Dobavljač', CUSTOMER: 'Kupac', BOTH: 'Dobavljač i kupac' };
 
 export function Partners() {
   const toast = useToast();
-  const [search, setSearch] = useState('');
-  const [inactive, setInactive] = useState(false);
-  const list = useLoad(() => api<Partner[]>('GET', `/partners?includeInactive=${inactive}${search ? `&search=${encodeURIComponent(search)}` : ''}`), [search, inactive]);
+  const list = useLoad(() => api<Partner[]>('GET', '/partners?includeInactive=true'), []);
   const [edit, setEdit] = useState<Partner | 'new' | null>(null);
+  const columns: Column<Partner>[] = [
+    { key: 'name', label: 'Naziv', value: (p) => p.name, render: (p) => <strong>{p.name}</strong> },
+    { key: 'taxId', label: 'PIB', value: (p) => p.taxId ?? '' },
+    { key: 'reg', label: 'Matični broj', value: (p) => p.registrationNo ?? '' },
+    { key: 'city', label: 'Mesto', value: (p) => p.city ?? '', filter: 'select' },
+    { key: 'kind', label: 'Vrsta', value: (p) => KIND[p.kind], filter: 'select' },
+    { key: 'contact', label: 'Kontakt', value: (p) => [p.phone, p.email].filter(Boolean).join(' · ') },
+    { key: 'active', label: 'Status', value: (p) => (p.active ? 'Aktivan' : 'Neaktivan'), filter: 'select',
+      render: (p) => (p.active ? <span className="badge paid">Aktivan</span> : <span className="badge cancelled">Neaktivan</span>) },
+  ];
   return (
     <div className="page">
       <div className="toolbar">
-        <h2 style={{ margin: 0, flex: 1 }}>Partneri</h2>
+        <span className="muted">Dobavljači i kupci (komitenti) za robna dokumenta i račune.</span>
         <button className="btn primary" onClick={() => setEdit('new')}>+ Novi partner</button>
       </div>
-      <div className="toolbar">
-        <input className="input" placeholder="Pretraga: naziv, PIB, mesto" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <label className="check row" style={{ alignItems: 'center' }}><input type="checkbox" checked={inactive} onChange={(e) => setInactive(e.target.checked)} /> i neaktivni</label>
-      </div>
-      {list.error ? <ErrorBox error={list.error} onRetry={list.reload} /> : !list.data ? <Spinner /> : !list.data.length ? <Empty>Nema partnera.</Empty> : (
-        <table className="tbl clickable">
-          <thead><tr><th>Naziv</th><th>PIB</th><th>Matični broj</th><th>Mesto</th><th>Vrsta</th><th>Kontakt</th><th>Status</th></tr></thead>
-          <tbody>{list.data.map((p) => (
-            <tr key={p.id} onClick={() => setEdit(p)}>
-              <td><strong>{p.name}</strong></td><td>{p.taxId ?? '—'}</td><td>{p.registrationNo ?? '—'}</td><td>{p.city ?? ''}</td>
-              <td>{KIND[p.kind]}</td><td className="small">{[p.phone, p.email].filter(Boolean).join(' · ')}</td>
-              <td>{p.active ? <span className="badge paid">Aktivan</span> : <span className="badge cancelled">Neaktivan</span>}</td>
-            </tr>))}
-          </tbody>
-        </table>
+      {list.error ? <ErrorBox error={list.error} onRetry={list.reload} /> : !list.data ? <Spinner /> : (
+        <DataTable columns={columns} rows={list.data} rowKey={(p) => p.id} onRowClick={setEdit} rowClass={(p) => (p.active ? undefined : 'inactive')} empty="Nema partnera." />
       )}
       {edit && <PartnerForm partner={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); toast('ok', 'Partner sačuvan'); }} />}
     </div>

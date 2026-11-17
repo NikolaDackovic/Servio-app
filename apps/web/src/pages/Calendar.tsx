@@ -73,7 +73,7 @@ export function DayDetail({ dayId, onBack, onReceipts }: { dayId: string; onBack
       </div>
       <h2>Poslovni dan {day.date.split('-').reverse().join('.')}. <span className={`badge ${day.status === 'OPEN' ? 'open' : 'paid'}`}>{day.status === 'OPEN' ? 'Otvoren' : 'Zaključen'}</span></h2>
       <p className="muted small">Otvoren {new Date(day.openedAt).toLocaleString('sr-Latn-RS')}{day.closedAt ? ` · zaključen ${new Date(day.closedAt).toLocaleString('sr-Latn-RS')}` : ''}</p>
-      {s.payments.containsTestPayments && <div className="test-banner">Dan sadrži TEST naplate — nisu fiskalni računi ni stvarne transakcije.</div>}
+      {s.payments.containsTestPayments && <div className="test-banner">Dan sadrži TEST naplate - nisu fiskalni računi ni stvarne transakcije.</div>}
       <div className="stats">
         <div className="stat"><span>Promet</span><b>{fmt(s.sales.gross)}</b></div>
         <div className="stat"><span>Broj računa</span><b>{s.sales.orders}</b></div>
@@ -99,7 +99,7 @@ export function DayDetail({ dayId, onBack, onReceipts }: { dayId: string; onBack
           {cashShifts.length === 0 ? <Empty>Nije bilo smena kase.</Empty> : (
             <table className="tbl"><thead><tr><th>Otvorena</th><th className="num">Početno</th><th className="num">Očekivano</th><th className="num">Prebrojano</th><th className="num">Razlika</th></tr></thead><tbody>
               {cashShifts.map((c: any) => (
-                <tr key={c.shift.id}><td>{time(c.shift.openedAt)}{c.shift.closedAt ? `–${time(c.shift.closedAt)}` : ' (otvorena)'}</td>
+                <tr key={c.shift.id}><td>{time(c.shift.openedAt)}{c.shift.closedAt ? `-${time(c.shift.closedAt)}` : ' (otvorena)'}</td>
                   <td className="num">{fmt(c.shift.openingCash)}</td><td className="num">{fmt(c.shift.expectedCash ?? c.expectedCash)}</td>
                   <td className="num">{fmt(c.shift.countedCash)}</td><td className="num">{fmt(c.shift.difference)}</td></tr>
               ))}
@@ -115,7 +115,7 @@ export function DayDetail({ dayId, onBack, onReceipts }: { dayId: string; onBack
       </div>
       <h3>Smene zaposlenih</h3>
       {staffShifts.length === 0 ? <Empty>Nema smena zaposlenih.</Empty> : (
-        <div className="grid2">{staffShifts.map((st: any) => <Specification key={st.id} summary={st} title={`${st.fullName} — ${st.status === 'OPEN' ? 'u toku' : 'završena'}`} />)}</div>
+        <div className="grid2">{staffShifts.map((st: any) => <Specification key={st.id} summary={st} title={`${st.fullName} - ${st.status === 'OPEN' ? 'u toku' : 'završena'}`} />)}</div>
       )}
     </div>
   );

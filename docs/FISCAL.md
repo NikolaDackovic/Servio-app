@@ -1,20 +1,30 @@
 # Kupac na računu, načini plaćanja i fiskalizacija
 
-> Stanje: postoji **fiskalni red i TESTNI adapter**. Stvarna integracija sa PFR/ESIR sistemom Poreske uprave **ne postoji** — nijedan račun iz ovog sistema nije fiskalni račun.
+> Stanje: fiskalni red, TEST adapter i **ESIR veza ka LPFR/VPFR** (API v3 Tehničkog vodiča). Veza je proverena samo prema **simuliranom** LPFR-u u testovima — **nije još proverena sa stvarnim LPFR uređajem/programom ni sa VPFR-om Poreske uprave**, a ESIR nije sertifikovan. Pre rada sa pravim računima: proba u Training režimu sa pravim LPFR-om i dogovor sa knjigovođom.
 
-## Fiskalni red (faza 3)
-- Kada račun pređe u PAID, u **istoj transakciji** nastaje zapis u `fiscal_receipts` (status PENDING) sa zahtevom: stavke posle popusta, oznake PDV-a, načini plaćanja, kupac.
-- Posle commit-a zahtev se šalje provajderu (čeka se najviše 5 s da odgovor naplate ne visi). Neuspeh: ponovni pokušaji sa rastućim razmakom (5 s … 10 min), najviše 8; trajna greška → FAILED i ručni „Ponovi“ u ADMIN → Fiskalizacija. **Naplata ne zavisi od fiskalnog sistema.**
-- Račun se prikazuje kao fiskalizovan **samo** kada je status SIGNED i provajder nije testni. CHECK u bazi: SIGNED mora imati broj i vreme.
-- Interfejs `FiscalizationProvider` (src/modules/fiscal/fiscal.ts): `sign(zahtev) → {ok, invoiceNumber, verificationUrl} | {ok:false, retryable, error}`.
-- `FISCAL_PROVIDER=TEST` (podrazumevano): `TestFiscalProvider` ništa ne šalje van sistema; broj je `TEST-YYYYMMDD-XXXXXXXX-N`, vrsta računa TRAINING, bez verifikacionog URL-a. Kasa, ADMIN, `/health` i odštampan račun jasno pišu „TEST — OVO NIJE FISKALNI RAČUN“.
-- `FISCAL_PROVIDER=NONE`: fiskalni zahtevi se ne prave; račun prikazuje „Nije fiskalizovano“.
-- Mapiranje načina plaćanja u zahtevu: Gotovina → Cash, Kartica → Card, Virman → WireTransfer, Reprezentacija → Other. **Nije provereno** prema Tehničkom vodiču — proveriti pre integracije (posebno reprezentaciju).
+## Uključivanje (TEST → pravi računi)
+1. ADMIN → Računari → kasa → *Fiskalizacija ove kase*: LPFR adresa (npr. `localhost:5555`) + PIN, ili VPFR (sertifikat `.pfx`, lozinka, PAC). Dugme **Proveri vezu** čita status PFR-a i otključava ga PIN-om — račun se ne izdaje.
+2. ADMIN → Podešavanja kase → *Fiskalni procesor*: **TEST** (podrazumevano) ili **LPFR / VPFR – pravi računi**. Od tog trenutka svaka naplata i povraćaj idu u PFR kase koja ih izdaje.
+- Račune šalje **server na glavnoj kasi**: `localhost` u adresi LPFR-a je glavni računar. LPFR druge kase upisati njenom IP adresom (npr. `192.168.1.21:5555`); sertifikat za VPFR mora biti na glavnom računaru.
+- PIN, PAC i lozinka sertifikata čitaju se iz podešavanja kase u trenutku slanja; **ne upisuju se u fiskalni red** i kasa ih ne vidi (`/computers/me`).
 
-### Šta nedostaje za stvarnu fiskalizaciju
-Sertifikat/bezbednosni element, ESIR/PFR API prema važećem Tehničkom vodiču, vrste računa (promet, avans, kopija, refundacija, obuka), QR/verifikacioni URL na računu, žurnal, rad bez veze (lokalni PFR), sertifikacija ESIR-a. Ništa od toga nije urađeno.
+## Fiskalni red
+- Kada račun pređe u PAID, u **istoj transakciji** nastaje zapis u `fiscal_receipts` (status PENDING) sa zahtevom: stavke posle popusta, oznake PDV-a, načini plaćanja, kupac, kasir, kasa.
+- Posle commit-a zahtev se šalje (čeka se najviše 5 s da naplata ne visi). PFR nedostupan / 5xx: ponovni pokušaji sa rastućim razmakom (5 s … 10 min), najviše 8. Odbijen račun (4xx) → FAILED odmah; ručni „Ponovi“ u ADMIN → Fiskalizacija. **Naplata ne zavisi od fiskalnog sistema.**
+- Račun se prikazuje kao fiskalizovan **samo** kada je status SIGNED i provajder nije testni. Broj računa, vreme PFR-a, brojač (npr. `12/15ПП`) i verifikacioni URL (QR) na isečku dolaze iz odgovora PFR-a.
+- `FISCAL_PROVIDER=NONE` (env) potpuno isključuje fiskalni red.
 
+### ESIR zahtev (src/modules/fiscal/esir.ts)
+- LPFR: `GET /api/v3/status` (gsc 1300 = nema kartice, 1500 = traži PIN) → `POST /api/v3/pin` → `POST /api/v3/invoices`.
+- VPFR: `POST /api/v3/invoices` preko https sa klijentskim sertifikatom i zaglavljem `PAC`.
+- Telo: `invoiceType` Normal/Training, `transactionType` Sale/Refund (refundacija nosi `referentDocumentNumber/DT` računa prodaje), `payment[]`, `items[]` (ćirilične oznake Ђ/Е/А/Г/Ж, jedinična cena posle popusta), `cashier`, `buyerId`, broj ESIR-a/broj računa.
+- Mapiranje plaćanja: Gotovina → Cash, Kartica → Card, Virman → WireTransfer, Reprezentacija → Other.
 
+### Šta još nije urađeno
+Kopija računa preko PFR-a (Copy) — kopija se sada štampa lokalno sa oznakom КОПИЈА; avansni računi; preuzimanje poreskih stopa iz PFR-a; žurnal sa PFR-a na isečku (koristi se sopstveni raspored); sertifikacija ESIR-a. Poreski tretman reprezentacije proveriti sa knjigovođom.
+
+## Reprezentacija
+Na kasi: REPREZENTACIJA → razlog (Čast kuće / Osoblje / Reprezentacija). Roba se skida sa stanja, novac se ne evidentira. Isečak piše samo **РЕПРЕЗЕНТАЦИЈА** i razlog — bez TEST/ОБУКА oznaka, i u test režimu.
 ## Identifikacija kupca (`orders.buyer_id_type`, `orders.buyer_id`)
 Šifre vrste identifikacije prema šifarniku eFiskalizacije (izvor: javno uputstvo knjigovodstvenog softvera Minimax koje prenosi šifarnik PU):
 

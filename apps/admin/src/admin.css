@@ -31,3 +31,142 @@
 tr.row-error td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 details.card > summary { cursor: pointer; padding: 4px 0; }
 .card.visible { overflow: visible; }
+
+/* Mapa stolova (editor) - crtež stola je isti kao na kasi (kasa.css) */
+.tm .toolbar { justify-content: space-between; align-items: center; }
+.tm-areas, .tm-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.tm-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+.tm-canvas { overflow: auto; padding: 12px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); touch-action: none; }
+.tm-item { position: absolute; cursor: grab; touch-action: none; }
+.tm-item:active { cursor: grabbing; }
+.tm-item .k-table { pointer-events: none; }
+.tm-item.sel { outline: 3px solid #f2b544; outline-offset: 3px; z-index: 2; }
+.tm-item.dirty::after { content: ''; position: absolute; top: -5px; left: -5px; width: 10px; height: 10px; border-radius: 50%; background: #f2b544; }
+.tm-handle { position: absolute; right: -8px; bottom: -8px; width: 18px; height: 18px; border-radius: 4px; background: #fff; border: 2px solid #2f7bc4; cursor: nwse-resize; z-index: 3; }
+.tm-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #6d5a3d; font-weight: 600; }
+.tm-panel h3 { margin-top: 0; }
+.grid2.tight { grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 1100px) { .tm-body { grid-template-columns: 1fr; } }
+
+/* Artikli: slika i boje kategorija */
+.img-edit { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: center; }
+.img-edit .state.error { grid-column: 1 / -1; }
+.img-preview { width: 96px; height: 96px; border: 1px solid var(--line); border-radius: 6px; background: #fff; display: grid; place-items: center; overflow: hidden; }
+.img-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.img-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.img-actions label.btn { display: inline-flex; align-items: center; color: var(--text); }
+.img-actions small { flex-basis: 100%; }
+td.thumb { width: 44px; padding: 4px; } td.thumb img { width: 36px; height: 36px; object-fit: contain; background: #fff; border-radius: 4px; display: block; }
+.cat-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.cat-chip { min-height: 36px; padding: 0 12px; border: 0; border-radius: 4px; color: #fff; font-weight: 700; cursor: pointer; background: var(--c); text-shadow: 0 1px 1px rgba(0,0,0,.4); }
+.cat-chip.off { opacity: .45; text-decoration: line-through; }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.swatch { width: 34px; height: 34px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; }
+.swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg); }
+
+/* Artikli: izmene na kasi */
+.opt-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 32px; align-items: center; }
+.opt-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 4px 4px 10px; border-radius: 4px; background: #2f7bc4; color: #fff; font-weight: 600; font-size: 14px; }
+.opt-chip button { border: 0; background: rgba(0,0,0,.2); color: #fff; width: 24px; height: 24px; border-radius: 3px; cursor: pointer; }
+.opt-add { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+
+/* Podešavanja */
+.setting { display: flex !important; gap: 12px; align-items: flex-start; padding: 10px 0; cursor: pointer; color: var(--text) !important; }
+.setting input { width: 24px; height: 24px; margin-top: 2px; accent-color: var(--accent); }
+.setting span { display: grid; gap: 4px; } .setting small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+/* Korisnici, uloge i prava */
+.excel-bar { display: flex; gap: 6px; flex-wrap: wrap; margin: -4px 0 10px; }
+.import-errors { border-color: var(--danger); }
+.tbl tr.inactive td { opacity: .55; }
+.roles { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 12px; align-items: start; }
+.roles-list { display: grid; gap: 6px; }
+.role-item { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; }
+.role-item span { font-size: 12px; color: var(--muted); }
+.role-item.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.role-name { max-width: 360px; font-weight: 700; font-size: 17px; }
+.btn-row.tight { margin: 0; }
+.perm-group { margin-top: 14px; }
+.perm-group-title { display: flex; justify-content: space-between; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 6px; }
+.perm-group-title .link { padding: 0 6px; font-size: 12px; }
+.perm { display: flex !important; align-items: center; gap: 10px; padding: 6px 2px; color: var(--text) !important; cursor: pointer; font-size: 14px; }
+.perm input { width: 20px; height: 20px; accent-color: var(--accent); }
+@media (max-width: 900px) { .roles { grid-template-columns: 1fr; } }
+
+/* ---------- ADMIN: celine gore (uvek vidljive), podgrupe u padajućem meniju ---------- */
+.admin2 { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }
+.adm-top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--bg-2); border-bottom: 1px solid var(--line); flex-wrap: wrap; position: relative; z-index: 30; }
+.adm-nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.adm-cat { position: relative; }
+.adm-cat-btn { min-height: 46px; padding: 0 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-weight: 800; font-size: 15px; cursor: pointer; white-space: nowrap; }
+.adm-cat-btn span { font-size: 11px; opacity: .6; margin-left: 4px; }
+.adm-cat-btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.adm-cat.open .adm-cat-btn { box-shadow: 0 0 0 2px var(--accent); }
+.adm-drop { position: absolute; top: calc(100% + 4px); left: 0; min-width: 240px; display: grid; gap: 2px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.25); }
+.adm-sub { text-align: left; min-height: 38px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.adm-sub:hover { background: var(--panel-2); color: var(--text); }
+.adm-sub.on { color: var(--text); background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+.adm-user { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.adm-crumb { padding: 8px 16px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.adm-crumb span { margin: 0 4px; } .adm-crumb b { color: var(--text); }
+@media (max-width: 820px) { .adm-cat-btn { min-height: 40px; padding: 0 10px; font-size: 13px; } .adm-drop { position: fixed; left: 8px; right: 8px; top: auto; } .adm-user span { display: none; } }
+
+/* Proizvod: odeljci forme i normativ */
+.pf-section { margin-top: 8px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.pf-section small { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 6px; }
+.tbl.norm td { padding: 4px; } .tbl.norm .input { min-height: 38px; }
+
+/* Pregled računa: isečak levo, tabela desno; storno crveno */
+.ar-split { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 12px; align-items: start; }
+.ar-slip { position: sticky; top: 8px; background: #fff; color: #1b1e23; border: 1px solid var(--line); border-radius: 6px; min-height: 200px; overflow: hidden; }
+.ar-empty { padding: 24px 16px; color: #5b6370; text-align: center; }
+.ar-table { overflow-x: auto; }
+.tbl tr.storno td { color: var(--danger); }
+.tbl tr.sel td { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+@media (max-width: 1000px) { .ar-split { grid-template-columns: 1fr; } .ar-slip { position: static; } }
+
+/* Specifikacija pazara: štampa */
+.print-day { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px 0; flex-wrap: wrap; }
+.print-day .input { width: auto; min-width: 220px; }
+
+/* ---- Zalihe, cenovnik, happy hour, izgled isečka ---- */
+.tbl tr.low td { color: var(--danger); font-weight: 600; }
+.pl-name { font-size: 18px; margin-left: 8px; }
+.pl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+.pl-val { width: 90px; }
+.pl-round { display: flex; align-items: center; gap: 6px; }
+.pl-round .input { width: auto; }
+.tbl.pl .pl-check { width: 84px; white-space: nowrap; }
+.tbl.pl .pl-price { width: 120px; text-align: right; }
+.input.invalid { border-color: var(--danger); }
+.icon-btn { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; font-size: 15px; margin-right: 4px; }
+.icon-btn:hover { border-color: var(--accent); }
+.day-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.day-chips .chip { min-height: 36px; padding: 0 12px; }
+.rl { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
+.rl > section { grid-column: 1; }
+.rl-preview { grid-column: 2; grid-row: 1 / span 3; position: sticky; top: 12px; }
+.rl-save { grid-column: 1 / -1; display: flex; justify-content: flex-start; }
+.rl-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.rl-ta { min-height: 72px; resize: vertical; font-family: inherit; }
+.rl-logo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rl-logo img { max-height: 80px; max-width: 200px; background: #fff; border: 1px solid var(--line); }
+.slip { background: #fff; color: #111; font-family: 'Courier New', monospace; font-size: 12px; padding: 14px 12px; border-radius: 4px; text-align: center; display: flex; flex-direction: column; gap: 2px; }
+.slip img { max-width: 100%; margin: 0 auto 6px; }
+.slip-title { margin-top: 8px; }
+.slip-row { display: flex; justify-content: space-between; text-align: left; white-space: pre; }
+.slip-sep { border-top: 1px dashed #555; margin: 6px 0; }
+@media (max-width: 900px) {
+  .rl { grid-template-columns: 1fr; }
+  .rl-preview { grid-column: 1; grid-row: auto; position: static; }
+}
+.tm-colors { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.tm-color { width: 30px; height: 30px; border-radius: 6px; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+.tm-color.on { outline: 3px solid var(--accent); outline-offset: 1px; }
+.tm-color.none { background: linear-gradient(135deg, #a8653a, #6a391c); position: relative; }
+.tm-color-pick { width: 36px; height: 32px; border: 0; padding: 0; background: none; cursor: pointer; }
+.ss-prev { max-width: 240px; max-height: 140px; border-radius: 6px; border: 1px solid var(--line); object-fit: cover; }
+.fslip { text-align: center; font-size: 11px; }
+.fslip .slip-row { white-space: pre; }
+.slip-sep.dbl { border-top: 3px double #555; }
+.slip-qr { width: 96px; height: 96px; margin: 8px auto; background: repeating-conic-gradient(#111 0 25%, #fff 0 50%) 0 0 / 12px 12px; color: transparent; }

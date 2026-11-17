@@ -3,7 +3,7 @@
  * normativi sa verzijama i automatski utrošak (idempotentno), popis, otpis, prenos, uvoz/izvoz CSV/XLSX.
  */
 import ExcelJS from 'exceljs';
-import { Ctx, auth, idem, passwordLogin, pinLogin, productId, setupApp, teardown } from './setup';
+import { Ctx, auth, idem, passwordLogin, pinLogin, productId, setupApp, teardown, today } from './setup';
 import { consumeForOrder } from '../../src/modules/stock/engine';
 import { DB, Db } from '../../src/db/db.module';
 
@@ -97,10 +97,10 @@ describe('Prijemnica i prosečna nabavna cena', () => {
   it('dve prijemnice: stanje i PPNC = (10×1000 + 5×1600) / 15 = 1200', async () => {
     first = await doc('RECEIPT', [{ productId: kafa, quantity: '10', unitCost: '1000' }, { productId: cola, quantity: '48', unitCost: '95,5' }], { partnerId: supplier, externalNumber: 'F-123/26' });
     const p1 = (await post(first.id).expect(200)).body;
-    expect(p1).toMatchObject({ status: 'POSTED', number: 1, displayNumber: 'PRI-1', total: '14584.00', alreadyPosted: false });
+    expect(p1).toMatchObject({ status: 'POSTED', number: 1, displayNumber: 'UF-1', total: '14584.00', alreadyPosted: false });
     expect(await bal(MAIN, kafa)).toEqual({ quantity: '10.0000', avg_cost: '1000.0000' });
     const second = await doc('RECEIPT', [{ productId: kafa, quantity: '5', unitCost: '1600' }], { partnerId: supplier });
-    expect((await post(second.id).expect(200)).body.displayNumber).toBe('PRI-2');
+    expect((await post(second.id).expect(200)).body.displayNumber).toBe('UF-2');
     expect(await bal(MAIN, kafa)).toEqual({ quantity: '15.0000', avg_cost: '1200.0000' });
     expect(await bal(MAIN, cola)).toEqual({ quantity: '48.0000', avg_cost: '95.5000' });
   });
@@ -119,7 +119,7 @@ describe('Prijemnica i prosečna nabavna cena', () => {
     expect(c.movements.map((m: any) => [m.in, m.balanceAfter, m.avgCostAfter])).toEqual([
       ['10.0000', '10.0000', '1000.0000'], ['5.0000', '15.0000', '1200.0000'],
     ]);
-    expect(c.movements[0].description).toMatch(/Prijemnica.*PRI-1.*Demo dobavljač/);
+    expect(c.movements[0].description).toMatch(/Ulazna faktura.*UF-1.*Demo dobavljač/);
     expect(c.closing).toEqual({ quantity: '15.0000', avgCost: '1200.0000' });
   });
 });
@@ -167,7 +167,7 @@ describe('Normativi i automatski utrošak', () => {
       ['R002', '-0.1200', 'BAR'], ['R003', '-0.2500', 'MAIN'], ['R004', '-1.0000', 'MAIN'], ['S001', '-1.0000', 'BAR'],
     ].sort() as any);
     expect(await bal(BAR, kafa)).toEqual({ quantity: '2.9760', avg_cost: '1200.0000' });
-    expect(await bal(BAR, mleko)).toMatchObject({ quantity: '-0.1200' }); // nije bilo prijema — minus je vidljiv
+    expect(await bal(BAR, mleko)).toMatchObject({ quantity: '-0.1200' }); // nije bilo prijema - minus je vidljiv
     const b = (await ctx.http().get(api(`/stock/balances?warehouseId=${BAR}&search=mleko`)).set(auth(manager)).expect(200)).body;
     expect(b.data[0]).toMatchObject({ name: 'Mleko', quantity: '-0.1200', negative: true });
   });
@@ -253,8 +253,12 @@ describe('Storno, popis, otpis', () => {
     expect(byCode.R002.quantity).toBe('0.0000'); // knjižno je u minusu → predlog 0
     const lines = filled.lines.map((l: any) => ({ productId: l.productId, quantity: l.code === 'S001' ? '10' : l.quantity }));
     await ctx.http().put(api(`/stock/documents/${d.id}/lines`)).set(auth(manager)).send({ lines }).expect(200);
+    // popis se knjiži samo na zatvorenu smenu (stanje za sutra), ne dok kasa radi
+    expect((await post(d.id).expect(409)).body.error.code).toBe('STOCKTAKE_SHIFT_OPEN');
+    await ctx.pool.query(`UPDATE business_days SET status = 'CLOSED', closed_at = now(), closed_by_id = opened_by_id WHERE status = 'OPEN'`);
     const colaBefore = await bal(BAR, cola);
     const p = (await post(d.id).expect(200)).body;
+    await ctx.pool.query(`UPDATE business_days SET status = 'OPEN', closed_at = NULL, closed_by_id = NULL WHERE id = (SELECT id FROM business_days ORDER BY opened_at DESC LIMIT 1)`);
     const colaLine = p.lines.find((l: any) => l.code === 'S001');
     expect(colaLine).toMatchObject({ quantity: '10.0000', bookQuantity: colaBefore.quantity });
     expect(colaLine.difference).toBe((10 - Number(colaBefore.quantity)).toFixed(4));
@@ -266,7 +270,7 @@ describe('Storno, popis, otpis', () => {
   });
 
   it('kartica: period sa početnim stanjem', async () => {
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.parse(today() + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10);
     const c = (await ctx.http().get(api(`/stock/card?productId=${kafa}&warehouseId=${MAIN}&from=${tomorrow}`)).set(auth(manager)).expect(200)).body;
     expect(c.movements).toHaveLength(0);
     expect(c.opening).toEqual(c.closing);
@@ -306,8 +310,8 @@ describe('Uvoz i izvoz', () => {
     expect(p).toMatchObject({ format: 'csv', total: 6, valid: 2, invalid: 4, creates: 1, updates: 1 });
     const byRow = Object.fromEntries(p.rows.map((r: any) => [r.row, r]));
     expect(byRow[2]).toMatchObject({ action: 'create', errors: [] });
-    expect(byRow[3].errors[0]).toMatch(/Kategorija „Nepostojeća“ ne postoji/);
-    expect(byRow[4].errors[0]).toMatch(/PDV oznaka „X“/);
+    expect(byRow[3].errors[0]).toMatch(/Grupa „Nepostojeća“ ne postoji/);
+    expect(byRow[4].errors[0]).toMatch(/PDV „X“ nije prepoznat/);
     expect(byRow[5].errors[0]).toMatch(/ponavlja u fajlu \(prvi put u redu 2\)/);
     expect(byRow[6].errors).toEqual(expect.arrayContaining([expect.stringMatching(/Cena „abc“/), expect.stringMatching(/Lager: očekuje se da\/ne/)]));
     expect(byRow[7]).toMatchObject({ action: 'update', errors: [] });

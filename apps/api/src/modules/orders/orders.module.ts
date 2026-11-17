@@ -7,7 +7,7 @@ import { P } from '../../common/permissions';
 import { OrdersService } from './orders.service';
 import { FiscalModule } from '../fiscal/fiscal';
 import {
-  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto, RenameOrderDto,
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto, MoveTableDto, RenameOrderDto,
   SetBuyerDto, SetDiscountDto, SettleDto, TransferOrdersDto, UpdateItemDto, VersionDto, VoidItemDto,
 } from './orders.dto';
 
@@ -84,9 +84,14 @@ export class OrdersController {
     return this.svc.rename(u, id, dto);
   }
 
-  @Post(':id/move-items') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
+  @Post(':id/move-items') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE, P.ORDER_SPLIT)
   moveItems(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: MoveItemsDto) {
     return this.svc.moveItems(u, id, dto);
+  }
+
+  @Post(':id/move-table') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE, P.ORDER_SPLIT)
+  moveTable(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: MoveTableDto) {
+    return this.svc.moveTable(u, id, dto);
   }
 
   @Post(':id/merge') @HttpCode(200) @RequirePermissions(P.ORDER_WRITE)
@@ -105,5 +110,5 @@ export class OrdersController {
   }
 }
 
-@Module({ imports: [FiscalModule], controllers: [OrdersController], providers: [OrdersService] })
+@Module({ imports: [FiscalModule], controllers: [OrdersController], providers: [OrdersService], exports: [OrdersService] })
 export class OrdersModule {}

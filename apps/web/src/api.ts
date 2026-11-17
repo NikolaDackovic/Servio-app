@@ -6,21 +6,35 @@ export class ApiError extends Error {
   }
 }
 
-const TOKEN_KEY = 'pos.token';
-const DEVICE_KEY = 'pos.deviceId';
+/** Ekran kuhinje/šanka na adresi /kds: sopstvena prijava i uređaj (kasa i KDS mogu biti otvoreni u istom pregledaču). */
+export const KDS_MODE = typeof location !== 'undefined' && /^\/kds(\/|$)/.test(location.pathname);
+/** ADMIN na adresi /admin (npr. poseban prozor na kasi): sopstvena prijava - promena konobara na kasi ne dira ADMIN. */
+const ADMIN_APP = typeof location !== 'undefined' && /^\/admin(\/|$)/.test(location.pathname);
+const TOKEN_KEY = KDS_MODE ? 'pos.kds.token' : ADMIN_APP ? 'pos.admin.token' : 'pos.token';
+const DEVICE_KEY = KDS_MODE ? 'pos.kds.deviceId' : 'pos.deviceId';
+
+/** ADMIN pamti prijavu samo dok je prozor otvoren (svako otvaranje ADMIN-a traži šifru); kasa i KDS ostaju prijavljeni. */
+const tokenStore = (): Storage => (ADMIN_APP ? sessionStorage : localStorage);
+try { if (ADMIN_APP) localStorage.removeItem(TOKEN_KEY); } catch { /* stara trajna prijava ADMIN-a se briše */ }
 
 export const storage = {
-  get token() { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } },
-  set token(v: string | null) { try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
+  get token() { try { return tokenStore().getItem(TOKEN_KEY); } catch { return null; } },
+  set token(v: string | null) { try { v ? tokenStore().setItem(TOKEN_KEY, v) : tokenStore().removeItem(TOKEN_KEY); } catch { /* ignore */ } },
   get deviceId() { try { return localStorage.getItem(DEVICE_KEY); } catch { return null; } },
   set deviceId(v: string | null) { try { v ? localStorage.setItem(DEVICE_KEY, v) : localStorage.removeItem(DEVICE_KEY); } catch { /* ignore */ } },
 };
+
+// Dodatni računar (desktop program kase) otvara kasu sa ?device=<id>: ta kasa je ovaj računar.
+try {
+  const d = new URLSearchParams(location.search).get('device');
+  if (d && /^[0-9a-f-]{36}$/i.test(d)) { storage.deviceId = d; history.replaceState(null, '', location.pathname); }
+} catch { /* van pregledača (testovi) */ }
 
 let onUnauthorized: () => void = () => {};
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
 /**
- * Poziv API-ja. `token` (opciono) koristi drugi nalog samo za ovaj poziv — npr. pregled računa
+ * Poziv API-ja. `token` (opciono) koristi drugi nalog samo za ovaj poziv - npr. pregled računa
  * uz PIN drugog konobara, bez odjave prijavljenog korisnika.
  */
 export async function api<T = any>(method: string, path: string, body?: unknown, token?: string): Promise<T> {
@@ -58,7 +72,7 @@ export function newIdempotencyKey(prefix = 'ui'): string {
 }
 
 export const fmt = (v: string | number | null | undefined) => {
-  if (v === null || v === undefined) return '—';
+  if (v === null || v === undefined) return '-';
   const [i, d = '00'] = String(v).split('.');
   return `${i.replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${d.padEnd(2, '0').slice(0, 2)}`;
 };
@@ -107,13 +121,15 @@ export interface Me {
   locations: { id: string; name: string }[];
   devices: { id: string; name: string; kind: string }[];
 }
-export interface Product { id: string; code: string; name: string; unit: string; price: string; color: string | null; categoryId: string; taxLabel: string; taxRate: string; active: boolean; taxRateId: string; barcode: string | null }
+export interface Product { id: string; code: string; name: string; unit: string; price: string; color: string | null; categoryId: string; taxLabel: string; taxRate: string; active: boolean; taxRateId: string; barcode: string | null; imageAt?: string | null; noteOptions?: string[] }
+/** Adresa slike artikla (javna, keširana po verziji). */
+export const productImageUrl = (p: { id: string; imageAt?: string | null }) => (p.imageAt ? `/api/v1/products/${p.id}/image?v=${encodeURIComponent(p.imageAt)}` : null);
 export interface Category { id: string; name: string; color: string | null; sortOrder: number; active: boolean }
 export interface OrderItem { id: string; productId: string; name: string; unitPrice: string; quantity: string; lineTotal: string; discountAmount: string; note: string | null; status: 'NEW' | 'SENT' | 'VOIDED'; sendBatch: number | null; voidReason: string | null; taxLabel: string;
   prepStationId?: string | null; prepStationName?: string | null; prepStatus?: 'NEW' | 'IN_PROGRESS' | 'READY' | 'DONE' | null }
 export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'REPRESENTATION';
 export const METHOD_LABEL: Record<string, string> = { CASH: 'Gotovina', CARD: 'Kartica', TRANSFER: 'Virman', REPRESENTATION: 'Reprezentacija' };
-export interface Payment { id: string; method: string; amount: string; tendered: string | null; change: string; mode: string; createdAt: string }
+export interface Payment { id: string; method: string; amount: string; tendered: string | null; change: string; mode: string; createdAt: string; note?: string | null }
 export interface Order {
   id: string; number: number; status: 'OPEN' | 'PAID' | 'CANCELLED' | 'MERGED'; total: string; paidTotal: string; remaining: string;
   subtotal: string; discountTotal: string; discountPercent: string; discountId: string | null; tabName: string | null; waiterId: string;
@@ -122,9 +138,9 @@ export interface Order {
   fiscal: Fiscal | null;
   items: OrderItem[]; payments: Payment[]; taxSummary: { label: string; rate: string; gross: string; tax: string; net: string }[];
 }
-export interface Table { id: string; name: string; area: string; seats: number; posX: number; posY: number; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string; waiterId: string; tabName: string | null }[] }
+export interface Table { id: string; name: string; area: string; seats: number; posX: number; posY: number; width: number; height: number; shape: 'RECT' | 'ROUND'; color?: string | null; isRoom?: boolean; status: 'FREE' | 'OCCUPIED' | 'PARTIALLY_PAID'; openOrders: { id: string; number: number; total: string; paidTotal: string; openedAt: string; waiterName: string; waiterId: string; tabName: string | null }[] }
 
-export interface Discount { id: string; name: string; percent: string; active: boolean; sortOrder: number }
+export interface Discount { id: string; name: string; percent: string; active: boolean; sortOrder: number; scope?: 'ALL' | 'GROUP' | 'PRODUCT'; targetIds?: string[] }
 
 /** Stanje fiskalizacije računa. Račun je fiskalizovan SAMO ako je status SIGNED i isTest = false. */
 export interface Fiscal {
@@ -134,10 +150,10 @@ export interface Fiscal {
 
 /** Kratak, istinit opis stanja fiskalizacije (bez tvrdnje da je račun fiskalni kada nije). */
 export function fiscalText(f: Fiscal | null | undefined): { cls: string; text: string } {
-  if (!f) return { cls: 'none', text: 'Nije fiskalizovano — fiskalizacija nije uključena.' };
-  if (f.status === 'SIGNED' && f.isTest) return { cls: 'signed-test', text: `TEST fiskalizacija: ${f.invoiceNumber} — ovo NIJE fiskalni račun.` };
+  if (!f) return { cls: 'none', text: 'Nije fiskalizovano - fiskalizacija nije uključena.' };
+  if (f.status === 'SIGNED' && f.isTest) return { cls: 'signed-test', text: `TEST fiskalizacija: ${f.invoiceNumber} - ovo NIJE fiskalni račun.` };
   if (f.status === 'SIGNED') return { cls: 'signed', text: `Fiskalizovano: ${f.invoiceNumber}` };
-  if (f.status === 'PENDING') return { cls: 'pending', text: `Fiskalizacija na čekanju (pokušaja: ${f.attempts})${f.lastError ? ` — ${f.lastError}` : ''}. Račun još NIJE fiskalizovan.` };
+  if (f.status === 'PENDING') return { cls: 'pending', text: `Fiskalizacija na čekanju (pokušaja: ${f.attempts})${f.lastError ? ` - ${f.lastError}` : ''}. Račun još NIJE fiskalizovan.` };
   if (f.status === 'FAILED') return { cls: 'failed', text: `Fiskalizacija NIJE uspela: ${f.lastError ?? 'nepoznata greška'}. Potrebna je ručna provera (ADMIN → Fiskalizacija).` };
   return { cls: 'none', text: 'Fiskalizacija nije potrebna.' };
 }

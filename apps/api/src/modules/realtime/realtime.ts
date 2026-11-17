@@ -88,7 +88,7 @@ export function attachRealtime(app: INestApplication) {
   }, HEARTBEAT_MS);
   hb.unref();
 
-  // Otvorene WebSocket veze bi sprečile gašenje HTTP servera — zatvaramo ih pre app.close().
+  // Otvorene WebSocket veze bi sprečile gašenje HTTP servera - zatvaramo ih pre app.close().
   const close = app.close.bind(app);
   app.close = async () => {
     clearInterval(hb);

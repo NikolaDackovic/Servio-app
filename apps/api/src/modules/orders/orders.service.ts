@@ -16,10 +16,11 @@ import { EventBus, RealtimeEvent } from '../../common/events';
 import { FiscalService } from '../fiscal/fiscal';
 import { routeBatch, routeVoids } from '../prep/routing';
 import { consumeForOrder } from '../stock/engine';
+import { effectivePrice } from '../pricing/pricing';
 import { fiscalReceipts, kdsTickets, prepStations } from '../../db/schema';
 import { summary as fiscalSummary } from '../fiscal/fiscal';
 import {
-  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto,
+  AddItemDto, CancelOrderDto, CreateOrderDto, CreatePaymentDto, ListOrdersQuery, MergeOrdersDto, MoveItemsDto, MoveTableDto,
   RenameOrderDto, SetBuyerDto, SetDiscountDto, SettleDto, TransferOrdersDto, UpdateItemDto, VoidItemDto, VersionDto,
 } from './orders.dto';
 
@@ -70,11 +71,17 @@ export class OrdersService {
    * Preračunava iznose iz stavki u bazi (izvor istine) i povećava verziju.
    * Popust računa (procenat) se raspoređuje po stavkama: popust stavke = round2(iznos × % / 100),
    * da bi PDV rekapitulacija po stopama bila tačna. total = subtotal − zbir popusta.
+   * Popust za grupe ili proizvode (ADMIN → Popusti) ide samo na stavke iz tih grupa / tih proizvoda.
    */
-  private async recompute(tx: Tx, o: OrderRow, discountPercent: string = o.discountPercent) {
+  private async recompute(tx: Tx, o: OrderRow, discountPercent: string = o.discountPercent, discountId: string | null = o.discountId) {
+    const [d] = discountId ? await tx.select({ scope: discounts.scope, targetIds: discounts.targetIds }).from(discounts).where(eq(discounts.id, discountId)) : [];
+    const targets = sql`${`{${(d?.targetIds ?? []).join(',')}}`}::uuid[]`;
+    const eligible = !d || d.scope === 'ALL' ? sql`TRUE`
+      : d.scope === 'GROUP' ? sql`product_id IN (SELECT p.id FROM products p WHERE p.category_id = ANY(${targets}))`
+        : sql`product_id = ANY(${targets})`;
     await tx.execute(sql`
       UPDATE order_items SET discount_amount =
-        CASE WHEN status = 'VOIDED' THEN 0 ELSE round(line_total * ${discountPercent}::numeric / 100, 2) END
+        CASE WHEN status = 'VOIDED' OR NOT (${eligible}) THEN 0 ELSE round(line_total * ${discountPercent}::numeric / 100, 2) END
       WHERE order_id = ${o.id}`);
     const rows = await tx.select({ lineTotal: orderItems.lineTotal, discount: orderItems.discountAmount }).from(orderItems)
       .where(and(eq(orderItems.orderId, o.id), ne(orderItems.status, 'VOIDED')));
@@ -169,6 +176,9 @@ export class OrdersService {
     if (q.businessDayId) conds.push(eq(orders.businessDayId, q.businessDayId));
     if (q.waiterId) conds.push(eq(orders.waiterId, q.waiterId));
     if (q.mine || !this.canAccessAll(u)) conds.push(eq(orders.waiterId, u.userId));
+    if (q.nonEmpty) conds.push(sql`exists (select 1 from order_items oi where oi.order_id = "orders"."id")`);
+    if (q.dayIds) conds.push(sql`${orders.businessDayId} in (select bd.id from business_days bd where bd.location_id = ${u.locationId} and bd.id::text = any(string_to_array(${q.dayIds}, ',')))`);
+    if (q.date) conds.push(sql`${orders.businessDayId} in (select bd.id from business_days bd where bd.location_id = ${u.locationId} and bd.date = ${q.date})`);
     const page = q.page ?? 1;
     const pageSize = q.pageSize ?? 50;
     return this.db
@@ -177,7 +187,14 @@ export class OrdersService {
         tableId: orders.tableId, tableName: diningTables.name, waiterId: orders.waiterId, waiterName: users.fullName,
         openedAt: orders.openedAt, closedAt: orders.closedAt, version: orders.version, businessDayId: orders.businessDayId,
         guests: orders.guests, tabName: orders.tabName, subtotal: orders.subtotal, discountTotal: orders.discountTotal,
-        buyerIdType: orders.buyerIdType, buyerId: orders.buyerId,
+        buyerIdType: orders.buyerIdType, buyerId: orders.buyerId, discountPercent: orders.discountPercent,
+        methods: sql<string | null>`(select string_agg(distinct p.method::text, ',') from payments p where p.order_id = "orders"."id")`,
+        voidReason: sql<string | null>`(select max(i.void_reason) from order_items i where i.order_id = "orders"."id")`,
+        paidBy: sql<Record<string, string> | null>`(select json_object_agg(x.m, x.s) from (select p.method::text as m, sum(p.amount)::text as s from payments p where p.order_id = "orders"."id" group by p.method) x)`,
+        // štampa sa kase (red štampe), a ako je račun štampao sam fiskalni uređaj - vreme fiskalizacije
+        printedAt: sql<string | null>`coalesce((select min(pj.created_at) from print_jobs pj where pj.order_id = "orders"."id" and pj.kind = 'RECEIPT' and pj.dedupe_key like 'receipt:%'), (select min(fr.signed_at) from fiscal_receipts fr where fr.order_id = "orders"."id" and fr.status = 'SIGNED' and fr.invoice_type <> 'TRAINING'))`,
+        fiscalNumber: sql<string | null>`(select fr.invoice_number from fiscal_receipts fr where fr.order_id = "orders"."id" order by fr.created_at desc limit 1)`,
+        itemQty: sql<string>`(select coalesce(sum(oi.quantity), 0)::text from order_items oi where oi.order_id = "orders"."id" and oi.status <> 'VOIDED')`,
       })
       .from(orders).innerJoin(users, eq(users.id, orders.waiterId))
       .leftJoin(diningTables, eq(diningTables.id, orders.tableId))
@@ -230,9 +247,11 @@ export class OrdersService {
       if (!p.product.active) throw Invalid('PRODUCT_INACTIVE', 'Proizvod nije aktivan');
       if (!p.product.isSellable) throw Invalid('PRODUCT_NOT_SELLABLE', `„${p.product.name}“ nije artikal za prodaju (sirovina)`);
       const q = qty(dto.quantity ?? '1');
+      // Cena: cenovnik kase i happy hour (ako važe), inače osnovna cena proizvoda.
+      const { price } = await effectivePrice(tx, u, p.product);
       const [item] = await tx.insert(orderItems).values({
-        orderId: o.id, productId: p.product.id, name: p.product.name, unitPrice: p.product.price,
-        quantity: q, taxLabel: p.taxLabel, taxRate: p.taxRate, lineTotal: money(lineTotal(p.product.price, q)),
+        orderId: o.id, productId: p.product.id, name: p.product.name, unitPrice: price,
+        quantity: q, taxLabel: p.taxLabel, taxRate: p.taxRate, lineTotal: money(lineTotal(price, q)),
         note: dto.note ?? null, addedById: u.userId,
       }).returning();
       await this.recompute(tx, o);
@@ -247,7 +266,7 @@ export class OrdersService {
       const [item] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
       if (!item) throw NotFound('Stavka');
       if (item.status !== 'NEW') {
-        throw Conflict('ITEM_ALREADY_SENT', 'Stavka je već poslata u pripremu — koristite storniranje');
+        throw Conflict('ITEM_ALREADY_SENT', 'Stavka je već poslata u pripremu - koristite storniranje');
       }
       const patch: Partial<typeof orderItems.$inferInsert> = {};
       if (dto.quantity !== undefined) {
@@ -269,7 +288,7 @@ export class OrdersService {
       const [item] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
       if (!item) throw NotFound('Stavka');
       if (item.status !== 'NEW') {
-        throw Conflict('ITEM_ALREADY_SENT', 'Stavka je već poslata u pripremu — koristite storniranje');
+        throw Conflict('ITEM_ALREADY_SENT', 'Stavka je već poslata u pripremu - koristite storniranje');
       }
       await tx.delete(orderItems).where(eq(orderItems.id, itemId));
       await this.recompute(tx, o);
@@ -280,14 +299,15 @@ export class OrdersService {
 
   /**
    * Šalje sve NOVE stavke u pripremu kao jednu "turu" (sendBatch).
-   * Ponovljeno slanje bez novih stavki ne pravi ništa (idempotentno) — ranije stavke se nikad ne šalju ponovo.
+   * Ponovljeno slanje bez novih stavki ne pravi ništa (idempotentno) - ranije stavke se nikad ne šalju ponovo.
    * Iteracija 2: iz ture se prave zadaci štampe i KDS događaji (rutirani po pripremnim pozicijama).
    */
-  async send(u: AuthUser, orderId: string, dto: VersionDto) {
+/** `only`: samo ove stavke (QR porudžbina gosta ne šalje konobarove još neposlate stavke). */
+  async send(u: AuthUser, orderId: string, dto: VersionDto, only?: string[]) {
     return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
-      const pending = await tx.select({ id: orderItems.id }).from(orderItems)
-        .where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'NEW')));
+      const pending = (await tx.select({ id: orderItems.id }).from(orderItems)
+        .where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'NEW')))).filter((p) => !only || only.includes(p.id));
       if (pending.length === 0) {
         return { batch: null, sentItems: [], order: await this.get(u, o.id, tx) };
       }
@@ -304,24 +324,48 @@ export class OrdersService {
     });
   }
 
+  /** Količina dela stavke: veća od nule i najviše koliko stavka ima. */
+  private partQty(q: string, of: string) {
+    const d = dec(q);
+    if (d.lte(0) || d.gt(dec(of))) throw Invalid('INVALID_PART_QUANTITY', `Količina mora biti između 0 i ${of}`);
+    return qty(q);
+  }
+
+  /**
+   * Deli stavku: od originala se odvaja deo `q` kao nova stavka istog artikla, cene, statusa, ture i KDS tiketa
+   * (npr. prebacuje se 2 od 5 kiselih voda). Ako je `q` cela količina, vraća samu stavku.
+   */
+  private async splitItem(tx: Tx, item: typeof orderItems.$inferSelect, q: string) {
+    const rest = dec(item.quantity).sub(dec(q));
+    if (rest.lte(0)) return item;
+    const restQty = qty(rest.toString());
+    await tx.update(orderItems).set({ quantity: restQty, lineTotal: money(lineTotal(item.unitPrice, restQty)) }).where(eq(orderItems.id, item.id));
+    const { id: _id, createdAt: _c, ...copy } = item;
+    const [part] = await tx.insert(orderItems).values({ ...copy, quantity: q, lineTotal: money(lineTotal(item.unitPrice, q)), discountAmount: '0' }).returning();
+    return part;
+  }
+
   async voidItem(u: AuthUser, orderId: string, itemId: string, dto: VoidItemDto) {
     if (!u.permissions.includes(P.ORDER_VOID)) {
       throw Conflict('FORBIDDEN_VOID', 'Storniranje poslate stavke zahteva pravo order.void');
     }
     return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
-      const [item] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
-      if (!item) throw NotFound('Stavka');
+      const [found] = await tx.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, o.id)));
+      if (!found) throw NotFound('Stavka');
+      let item = found;
       if (item.status === 'VOIDED') throw Conflict('ITEM_ALREADY_VOIDED', 'Stavka je već stornirana');
       if (item.status === 'NEW') throw Conflict('ITEM_NOT_SENT', 'Neposlata stavka se uklanja, ne stornira');
+      // Delimični storno: od stavke se odvaja stornirana količina, ostatak ostaje aktivan.
+      if (dto.quantity !== undefined) item = await this.splitItem(tx, item, this.partQty(dto.quantity, item.quantity));
       await tx.update(orderItems).set({
         status: 'VOIDED', voidReason: dto.reason, voidedById: u.userId, voidedAt: new Date(),
-      }).where(eq(orderItems.id, itemId));
+      }).where(eq(orderItems.id, item.id));
       await this.recompute(tx, o);
       ev.push(...await routeVoids(tx, o, [item], dto.reason, 'item'));
       ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
       await audit(tx, u, 'order.item.void', 'order', o.id, {
-        itemId, product: item.name, quantity: item.quantity, lineTotal: item.lineTotal, reason: dto.reason,
+        itemId: item.id, product: item.name, quantity: item.quantity, lineTotal: item.lineTotal, reason: dto.reason,
       });
       return this.get(u, o.id, tx);
     });
@@ -335,7 +379,7 @@ export class OrdersService {
       if (!dec(o.paidTotal).isZero()) throw Conflict('ORDER_HAS_PAYMENTS', 'Porudžbina ima naplatu i ne može se otkazati');
       const [{ c }] = await tx.select({ c: sql<number>`count(*)::int` }).from(orderItems)
         .where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'SENT')));
-      if (c > 0) throw Conflict('ORDER_HAS_SENT_ITEMS', 'Porudžbina ima poslate stavke — prvo ih stornirajte');
+      if (c > 0) throw Conflict('ORDER_HAS_SENT_ITEMS', 'Porudžbina ima poslate stavke - prvo ih stornirajte');
       await tx.delete(orderItems).where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'NEW')));
       await tx.update(orders).set({
         status: 'CANCELLED', subtotal: '0.00', discountTotal: '0.00', total: '0.00', closedAt: new Date(), closedById: u.userId, version: o.version + 1, updatedAt: new Date(),
@@ -346,7 +390,7 @@ export class OrdersService {
   }
 
   /**
-   * Naplata (iteracija 1: isključivo TEST režim — bez platnog terminala i bez fiskalizacije).
+   * Naplata (iteracija 1: isključivo TEST režim - bez platnog terminala i bez fiskalizacije).
    *
    * Garancije:
    *  - Red porudžbine je zaključan FOR UPDATE: paralelne naplate se serijalizuju.
@@ -363,7 +407,7 @@ export class OrdersService {
   }
 
   /**
-   * Naplata u jednom ili više delova (npr. "mix": deo karticom, ostatak gotovinom) — sve u jednoj transakciji:
+   * Naplata u jednom ili više delova (npr. "mix": deo karticom, ostatak gotovinom) - sve u jednoj transakciji:
    * ili su evidentirani svi delovi, ili nijedan. Ključ dela = idempotencyKey (jedan deo) ili idempotencyKey#i.
    * Reprezentacija: samo kao jedini način, za ceo račun i bez prethodnih naplata.
    */
@@ -424,6 +468,7 @@ export class OrdersService {
           orderId: o.id, shiftId: shift.id, businessDayId: day.id, staffShiftId: staffShift.id,
           deviceId: u.deviceId, method: part.method, mode: 'TEST',
           amount: money(amount), tendered, change: money(change), idempotencyKey: keyOf(i), createdById: u.userId,
+          note: part.method === 'REPRESENTATION' ? (part.note?.trim() || 'Reprezentacija') : null,
         }).returning();
         created.push(payment);
         paid = paid.add(amount);
@@ -445,8 +490,8 @@ export class OrdersService {
       if (settled) {
         await audit(tx, u, 'order.close', 'order', o.id, { total: o.total });
         // Fiskalni zahtev nastaje u istoj transakciji; šalje se provajderu posle commit-a (naplata ne zavisi od njega).
-        fiscalId = await this.fiscal.enqueueForPaidOrder(tx, { ...o, paidTotal: money(paid), status: 'PAID' });
-        // Automatski utrošak robe (normativi / artikli sa zalihom) — u istoj transakciji, idempotentno po stavci.
+        fiscalId = await this.fiscal.enqueueForPaidOrder(tx, { ...o, paidTotal: money(paid), status: 'PAID' }, { deviceId: u.deviceId ?? o.deviceId, cashier: u.fullName });
+        // Automatski utrošak robe (normativi / artikli sa zalihom) - u istoj transakciji, idempotentno po stavci.
         await consumeForOrder(tx, o.id, u.userId);
       }
       ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
@@ -475,7 +520,7 @@ export class OrdersService {
         percent = d.percent; name = d.name;
       }
       await tx.update(orders).set({ discountId: dto.discountId ?? null }).where(eq(orders.id, o.id));
-      await this.recompute(tx, o, percent);
+      await this.recompute(tx, o, percent, dto.discountId ?? null);
       await audit(tx, u, dto.discountId ? 'order.discount.set' : 'order.discount.remove', 'order', o.id, { name, percent });
       return this.get(u, o.id, tx);
     });
@@ -520,7 +565,7 @@ export class OrdersService {
 
   /**
    * Prebacivanje izabranih stavki na drugi račun (postojeću turu, ili novu turu/sto).
-   * Stavke zadržavaju status (poslate ostaju poslate — ne idu ponovo u pripremu) i snimak cene.
+   * Stavke zadržavaju status (poslate ostaju poslate - ne idu ponovo u pripremu) i snimak cene.
    * Zaključavanje oba računa u stalnom redosledu (po id) sprečava deadlock.
    */
   async moveItems(u: AuthUser, orderId: string, dto: MoveItemsDto) {
@@ -545,10 +590,20 @@ export class OrdersService {
       const src = locked[orderId];
       const dst = locked[targetId];
 
-      const items = await tx.select().from(orderItems)
+      let items = await tx.select().from(orderItems)
         .where(and(eq(orderItems.orderId, src.id), inArray(orderItems.id, dto.itemIds)));
       if (items.length !== new Set(dto.itemIds).size) throw Invalid('INVALID_ITEMS', 'Neke stavke ne pripadaju ovom računu');
       if (items.some((i) => i.status === 'VOIDED')) throw Invalid('CANNOT_MOVE_VOIDED', 'Stornirane stavke se ne prebacuju');
+      // Delimično prebacivanje: quantities[i] je količina za itemIds[i] (npr. 2 od 5) - deo se odvaja kao nova stavka.
+      if (dto.quantities) {
+        if (dto.quantities.length !== dto.itemIds.length) throw Invalid('INVALID_QUANTITIES', 'Broj količina ne odgovara broju stavki');
+        const byId = new Map(items.map((i) => [i.id, i]));
+        items = [];
+        for (let k = 0; k < dto.itemIds.length; k++) {
+          const it = byId.get(dto.itemIds[k])!;
+          items.push(await this.splitItem(tx, it, this.partQty(dto.quantities[k], it.quantity)));
+        }
+      }
 
       await tx.update(orderItems).set({ orderId: dst.id }).where(inArray(orderItems.id, items.map((i) => i.id)));
       await this.recompute(tx, src);
@@ -557,7 +612,32 @@ export class OrdersService {
       const summary = items.map((i) => ({ itemId: i.id, product: i.name, quantity: i.quantity }));
       await audit(tx, u, 'order.items.move_out', 'order', src.id, { toOrderId: dst.id, toNumber: dst.number, items: summary });
       await audit(tx, u, 'order.items.move_in', 'order', dst.id, { fromOrderId: src.id, fromNumber: src.number, items: summary });
+      // Prebačene su sve žive stavke → izvorni račun se zatvara (ne ostaje otvoren sto sa 0 RSD):
+      // bez ikakvih stavki = MERGED (prešao u odredište), sa ranijim stornima = CANCELLED.
+      const rest = await tx.select({ status: orderItems.status }).from(orderItems).where(eq(orderItems.orderId, src.id));
+      if (!rest.some((i) => i.status !== 'VOIDED') && dec(src.paidTotal).isZero()) {
+        const status = rest.length ? 'CANCELLED' : 'MERGED';
+        await tx.update(orders).set({
+          status, mergedIntoId: status === 'MERGED' ? dst.id : null, closedAt: new Date(), closedById: u.userId, updatedAt: new Date(),
+        }).where(eq(orders.id, src.id));
+        await audit(tx, u, 'order.emptied_by_move', 'order', src.id, { toOrderId: dst.id, status });
+      }
       return { from: await this.get(u, src.id, tx), to: await this.get(u, dst.id, tx) };
+    });
+  }
+
+  /** Ceo račun prelazi na drugi sto (gost se premestio); na odredišnom stolu postaje još jedna tura ako tamo već ima računa. */
+  async moveTable(u: AuthUser, orderId: string, dto: MoveTableDto) {
+    return this.withEvents(async (tx, ev) => {
+      const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
+      const [t] = await tx.select({ id: diningTables.id, name: diningTables.name }).from(diningTables)
+        .where(and(eq(diningTables.id, dto.toTableId), eq(diningTables.locationId, u.locationId), eq(diningTables.active, true)));
+      if (!t) throw NotFound('Sto');
+      if (o.tableId === t.id) throw Invalid('MOVE_SAME_TABLE', 'Račun je već na tom stolu');
+      await tx.update(orders).set({ tableId: t.id, version: o.version + 1, updatedAt: new Date() }).where(eq(orders.id, o.id));
+      await audit(tx, u, 'order.move_table', 'order', o.id, { fromTableId: o.tableId, toTableId: t.id, toTable: t.name });
+      ev.push({ type: 'order.updated', locationId: o.locationId, data: { orderId: o.id } });
+      return this.get(u, o.id, tx);
     });
   }
 
@@ -604,7 +684,7 @@ export class OrdersService {
     }
     return this.withEvents(async (tx, ev) => {
       const o = await this.lockOrder(tx, u, orderId, { expectedVersion: dto.expectedVersion });
-      if (!dec(o.paidTotal).isZero()) throw Conflict('ORDER_HAS_PAYMENTS', 'Račun ima naplatu — storno celog računa nije moguć');
+      if (!dec(o.paidTotal).isZero()) throw Conflict('ORDER_HAS_PAYMENTS', 'Račun ima naplatu - storno celog računa nije moguć');
       const sent = await tx.update(orderItems)
         .set({ status: 'VOIDED', voidReason: dto.reason, voidedById: u.userId, voidedAt: new Date(), discountAmount: '0.00' })
         .where(and(eq(orderItems.orderId, o.id), eq(orderItems.status, 'SENT'))).returning();
@@ -647,7 +727,7 @@ export class OrdersService {
         if (!o) throw NotFound('Porudžbina');
         if (o.status !== 'OPEN') throw Conflict('ORDER_NOT_OPEN', `Račun #${o.number} nije otvoren`);
         if (o.waiterId !== u.userId && !u.permissions.includes(P.ORDER_TRANSFER)) {
-          throw Conflict('ORDER_NOT_YOURS', `Račun #${o.number} pripada drugom konobaru — prebacivanje tuđih računa zahteva pravo order.transfer`);
+          throw Conflict('ORDER_NOT_YOURS', `Račun #${o.number} pripada drugom konobaru - prebacivanje tuđih računa zahteva pravo order.transfer`);
         }
         if (o.waiterId === target.id) continue;
         await tx.update(orders).set({ waiterId: target.id, version: o.version + 1, updatedAt: new Date() }).where(eq(orders.id, o.id));

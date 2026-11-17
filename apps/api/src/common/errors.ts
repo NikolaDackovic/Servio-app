@@ -54,7 +54,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     // Kršenje ograničenja baze → 409 sa jasnim kodom (bez izlaganja SQL detalja).
-    // Drizzle umotava grešku drajvera u `cause` — tražimo PostgreSQL kod u lancu.
+    // Drizzle umotava grešku drajvera u `cause` - tražimo PostgreSQL kod u lancu.
     let pg = exception as { code?: string; constraint?: string; cause?: unknown };
     for (let i = 0; i < 3 && pg && !pg.code && pg.cause; i++) pg = pg.cause as typeof pg;
     if (pg?.code === '23505') {

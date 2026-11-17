@@ -9,7 +9,9 @@ PostgreSQL 16. Šema: `apps/api/src/db/schema.ts`. Migracije: `apps/api/migratio
 | organizations, locations, devices | Višelokalni kontekst; uređaj = kasa / mobilni / KDS |
 | roles, users | Uloge sa listom prava; korisnik ima lozinku i/ili PIN (heš + HMAC lookup) |
 | tax_rates, categories, products, product_price_changes | Katalog, poreske stope, istorija cena |
-| dining_tables | Stolovi po prostoriji, pozicija za mapu |
+| dining_tables | Stolovi po prostoriji: pozicija, veličina i oblik za mapu (0005; CHECK oblik i opseg veličine) |
+| product_images | Slika artikla za kasu (0005), odvojeno od `products` da lista artikala ostane lagana |
+| products.note_options | Izmene artikla za kasu (0006, jsonb niz); `print_job_kind` dobija `SHIFT_REPORT` (štampa pazara) |
 | orders, order_items | Porudžbina/račun i stavke sa snimkom naziva, cene i poreza |
 | payments | Plaćanja (metoda, režim TEST/LIVE, kusur, idempotency ključ) |
 | cash_shifts, cash_movements | Blagajnička smena po uređaju, uplate i isplate |

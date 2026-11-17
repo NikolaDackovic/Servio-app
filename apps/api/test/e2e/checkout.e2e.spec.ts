@@ -60,6 +60,23 @@ describe('Popusti', () => {
     expect(none).toMatchObject({ discountTotal: '0.00', total: '1550.00' });
   });
 
+  it('popust na grupu ili proizvod ide samo na te stavke; opseg bez ciljeva se odbija', async () => {
+    const cats = (await ctx.http().get(api('/categories')).set(auth(manager)).expect(200)).body;
+    const hrana = cats.find((c: any) => c.name === 'Hrana').id;
+    expect((await ctx.http().post(api('/discounts')).set(auth(manager)).send({ name: 'Bez cilja', percent: '10', scope: 'GROUP', targetIds: [] }).expect(422)).body.error.code).toBe('DISCOUNT_TARGETS');
+    const g = (await ctx.http().post(api('/discounts')).set(auth(manager)).send({ name: 'Hrana 50%', percent: '50', scope: 'GROUP', targetIds: [hrana] }).expect(201)).body;
+    const id = await order(waiter, [espresso, pljeskavica]); // 180 (Topli napici) + 990 (Hrana)
+    const o = (await ctx.http().put(api(`/orders/${id}/discount`)).set(auth(waiter)).send({ discountId: g.id }).expect(200)).body;
+    expect(o).toMatchObject({ subtotal: '1170.00', discountTotal: '495.00', total: '675.00' });
+    const p = (await ctx.http().post(api('/discounts')).set(auth(manager)).send({ name: 'Espresso 10%', percent: '10', scope: 'PRODUCT', targetIds: [espresso] }).expect(201)).body;
+    const o2 = (await ctx.http().put(api(`/orders/${id}/discount`)).set(auth(waiter)).send({ discountId: p.id }).expect(200)).body;
+    expect(o2).toMatchObject({ discountTotal: '18.00', total: '1152.00' });
+    // izmena opsega na ceo račun
+    await ctx.http().patch(api(`/discounts/${p.id}`)).set(auth(manager)).send({ scope: 'ALL' }).expect(200);
+    await ctx.http().put(api(`/orders/${id}/discount`)).set(auth(waiter)).send({ discountId: null }).expect(200);
+    expect((await ctx.http().put(api(`/orders/${id}/discount`)).set(auth(waiter)).send({ discountId: p.id }).expect(200)).body.discountTotal).toBe('117.00');
+  });
+
   it('izveštaj računa promet i porez posle popusta i prikazuje ukupan popust', async () => {
     const id = await order(waiter, [pljeskavica]); // 990
     await ctx.http().put(api(`/orders/${id}/discount`)).set(auth(waiter)).send({ discountId: d40 }).expect(200); // 594
@@ -86,11 +103,11 @@ describe('Kupac na računu', () => {
     const id = await order(waiter, [espresso]);
     expect((await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter)).send({ idType: '10', idValue: '100000025' }).expect(422)).body.error.code).toBe('INVALID_PIB');
     expect((await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter)).send({ idType: '99', idValue: '123' }).expect(422)).body.error.code).toBe('INVALID_BUYER_TYPE');
-    expect((await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter)).send({ idType: '31', idValue: 'D-1234', optionalBasis: 'LNPDV — lice sa pravom na oslobođenje od PDV-a' }).expect(422)).body.error.code).toBe('INVALID_BUYER_OPTIONAL');
+    expect((await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter)).send({ idType: '31', idValue: 'D-1234', optionalBasis: 'LNPDV - lice sa pravom na oslobođenje od PDV-a' }).expect(422)).body.error.code).toBe('INVALID_BUYER_OPTIONAL');
     const ok = (await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter)).send({ idType: '10', idValue: '100000024' }).expect(200)).body;
     expect(ok).toMatchObject({ buyerIdType: '10', buyerId: '100000024', buyerIdLabel: 'PIB' });
     const dipl = (await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter))
-      .send({ idType: '31', idValue: 'D-1234', optionalBasis: 'LNPDV — lice sa pravom na oslobođenje od PDV-a', optionalValue: '777' }).expect(200)).body;
+      .send({ idType: '31', idValue: 'D-1234', optionalBasis: 'LNPDV - lice sa pravom na oslobođenje od PDV-a', optionalValue: '777' }).expect(200)).body;
     expect(dipl).toMatchObject({ buyerIdType: '31', buyerOptionalValue: '777' });
     const cleared = (await ctx.http().put(api(`/orders/${id}/buyer`)).set(auth(waiter)).send({ idType: null }).expect(200)).body;
     expect(cleared.buyerIdType).toBeNull();
@@ -123,7 +140,7 @@ describe('Naplata: mix i reprezentacija', () => {
     expect(rows[0].c).toBe(0);
   });
 
-  it('reprezentacija: samo ceo račun; prikazuje se odvojeno od naplaćenog novca', async () => {
+  it('reprezentacija: samo ceo račun; ulazi u pazar kao posebna stavka, ne u gotovinu za predaju', async () => {
     const id = await order(waiter, [espresso, espresso]); // 360
     expect((await ctx.http().post(api(`/orders/${id}/settle`)).set(auth(waiter))
       .send({ parts: [{ method: 'REPRESENTATION', amount: '100.00' }], idempotencyKey: idem() }).expect(422)).body.error.code).toBe('REPRESENTATION_WHOLE_ONLY');
@@ -132,6 +149,8 @@ describe('Naplata: mix i reprezentacija', () => {
     expect(r.body.order.status).toBe('PAID');
     const shift = (await ctx.http().get(api('/staff-shifts/current')).set(auth(waiter)).expect(200)).body.summary;
     expect(shift.collected.representation).toBe('360.00');
+    expect(Number(shift.collected.total)).toBeGreaterThanOrEqual(360);
+    expect(shift.collected.cashToHandOver).not.toBe(shift.collected.total);
     const day = (await ctx.http().get(api('/business-days/current')).set(auth(manager)).expect(200)).body;
     expect(day.sales.payments.representation).toBe('360.00');
     expect(day.sales.payments.byMethod.find((m: any) => m.method === 'REPRESENTATION').amount).toBe('360.00');
@@ -167,6 +186,7 @@ describe('Ture na stolu, prebacivanje stavki, spajanje', () => {
     const r = await ctx.http().post(api(`/orders/${pera}/move-items`)).set(auth(waiter))
       .send({ itemIds: [p.items[0].id], toTableId: sto6, toTabName: 'Šank gost' }).expect(200);
     expect(r.body.from.total).toBe('0.00');
+    expect(r.body.from.status).toBe('MERGED'); // bez stavki → izvorni račun se sam zatvara (ne ostaje sto sa 0 RSD)
     expect(r.body.to).toMatchObject({ tableId: sto6, tabName: 'Šank gost', total: '180.00' });
   });
 
@@ -176,9 +196,9 @@ describe('Ture na stolu, prebacivanje stavki, spajanje', () => {
     await ctx.http().post(api(`/orders/${partial}/payments`)).set(auth(waiter)).send({ method: 'CASH', amount: '50.00', idempotencyKey: idem() }).expect(201);
     expect((await ctx.http().post(api(`/orders/${zika}/merge`)).set(auth(waiter)).send({ fromOrderIds: [partial] }).expect(409)).body.error.code).toBe('ORDER_HAS_PAYMENTS');
 
-    const merged = (await ctx.http().post(api(`/orders/${zika}/merge`)).set(auth(waiter)).send({ fromOrderIds: [pera, mika] }).expect(200)).body;
+    const merged = (await ctx.http().post(api(`/orders/${zika}/merge`)).set(auth(waiter)).send({ fromOrderIds: [mika] }).expect(200)).body;
     expect(merged.total).toBe('1370.00'); // 200 (proja) + 1170 (Mika: pljeskavica + espresso)
-    const { rows } = await ctx.pool.query(`SELECT status, merged_into_id FROM orders WHERE id = ANY($1)`, [[pera, mika]]);
+    const { rows } = await ctx.pool.query(`SELECT status, merged_into_id FROM orders WHERE id = ANY($1)`, [[mika]]);
     expect(rows.every((r: any) => r.status === 'MERGED' && r.merged_into_id === zika)).toBe(true);
     const paid = await ctx.http().post(api(`/orders/${zika}/payments`)).set(auth(waiter)).send({ method: 'CARD', idempotencyKey: idem() }).expect(201);
     expect(paid.body.order.status).toBe('PAID');

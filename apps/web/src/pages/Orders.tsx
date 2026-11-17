@@ -16,7 +16,7 @@ const ACTION: Record<string, string> = {
 /** Pregled računa: filteri, detalji sa stavkama, plaćanjima, porezom i istorijom izmena. */
 export function Orders({ onOpen, businessDayId, onClearDay, readOnly, token, viewerName }: {
   onOpen?: (id: string) => void; businessDayId?: string | null; onClearDay?: () => void;
-  /** Pregled sa tokenom drugog korisnika (PIN na kasi) — prava i vidljivost su njegova. */
+  /** Pregled sa tokenom drugog korisnika (PIN na kasi) - prava i vidljivost su njegova. */
   token?: string; viewerName?: string;
   /** Admin: svaki račun se otvara kao pregled (bez kucanja). */
   readOnly?: boolean;
@@ -48,7 +48,7 @@ export function Orders({ onOpen, businessDayId, onClearDay, readOnly, token, vie
           </div>
         )}
       </div>
-      {!businessDayId && scope === 'today' && cur.data && !cur.data.day && <div className="notice">Nema otvorenog poslovnog dana — izaberite „Svi“.</div>}
+      {!businessDayId && scope === 'today' && cur.data && !cur.data.day && <div className="notice">Nema otvorenog poslovnog dana - izaberite „Svi“.</div>}
       {r.loading && !r.data ? <Spinner /> : r.error ? <ErrorBox error={r.error} onRetry={r.reload} /> :
         !r.data?.length ? <Empty>Nema računa za izabrani filter.</Empty> : (
           <table className="tbl clickable">
@@ -57,7 +57,7 @@ export function Orders({ onOpen, businessDayId, onClearDay, readOnly, token, vie
               {r.data.map((o) => (
                 <tr key={o.id} onClick={() => (o.status === 'OPEN' && !readOnly && onOpen ? onOpen(o.id) : setDetail(o.id))}>
                   <td>{o.number}</td><td>{o.tableName ?? 'Brza prodaja'}{o.tabName ? ` · ${o.tabName}` : ''}{o.buyerId ? ' · 🏢' : ''}</td><td>{o.waiterName}</td><td>{time(o.openedAt)}</td>
-                  <td>{o.closedAt ? time(o.closedAt) : '—'}</td>
+                  <td>{o.closedAt ? time(o.closedAt) : '-'}</td>
                   <td className="num">{fmt(o.total)}</td><td className="num">{fmt(o.paidTotal)}</td>
                 </tr>
               ))}
@@ -74,7 +74,7 @@ export function ReceiptDetail({ orderId, onClose, token }: { orderId: string; on
   const h = useLoad(() => api<any[]>('GET', `/orders/${orderId}/history`, undefined, token), [orderId, token]);
   const [tab, setTab] = useState<'items' | 'history'>('items');
   return (
-    <Modal title={o.data ? `Račun #${o.data.number} — ${o.data.tableName ?? 'Brza prodaja'}` : 'Račun'} onClose={onClose} wide>
+    <Modal title={o.data ? `Račun #${o.data.number} - ${o.data.tableName ?? 'Brza prodaja'}` : 'Račun'} onClose={onClose} wide>
       {o.loading ? <Spinner /> : o.error ? <ErrorBox error={o.error} /> : o.data && (
         <>
           <div className="test-banner">Interni pregled računa (TEST režim naplate).</div>
@@ -121,7 +121,7 @@ export function ReceiptDetail({ orderId, onClose, token }: { orderId: string; on
               {h.data!.map((e) => (
                 <li key={e.id} className={e.action === 'order.item.void' ? 'void' : ''}>
                   <span className="t-time">{new Date(e.createdAt).toLocaleTimeString('sr-Latn-RS')}</span>
-                  <span className="t-who">{e.userName ?? '—'}</span>
+                  <span className="t-who">{e.userName ?? '-'}</span>
                   <span className="t-what">{ACTION[e.action] ?? e.action}{describe(e)}</span>
                 </li>
               ))}
@@ -138,27 +138,27 @@ function describe(e: any): string {
   switch (e.action) {
     case 'order.item.add': return `: ${d.product} × ${fmtQty(d.quantity)}`;
     case 'order.item.remove': return `: ${d.product}`;
-    case 'order.item.void': return `: ${d.product} (${fmt(d.lineTotal)}) — razlog: ${d.reason}`;
+    case 'order.item.void': return `: ${d.product} (${fmt(d.lineTotal)}) - razlog: ${d.reason}`;
     case 'order.send': return ` (tura ${d.batch}, ${d.itemIds?.length ?? 0} stavki)`;
     case 'payment.create': return `: ${METHOD[d.method] ?? d.method} ${fmt(d.amount)}${d.mode === 'TEST' ? ' (TEST)' : ''}`;
     case 'order.close': return `: ${fmt(d.total)}`;
     case 'order.transfer': return ` → ${d.toName}`;
-    case 'order.cancel': return ` — razlog: ${d.reason}`;
+    case 'order.cancel': return ` - razlog: ${d.reason}`;
     case 'order.discount.set': return `: ${d.name} (${d.percent}%)`;
     case 'order.buyer.set': return `: ${d.idType} ${d.idValue}`;
     case 'order.items.move_out': return ` #${d.toNumber}: ${(d.items ?? []).map((i: any) => i.product).join(', ')}`;
     case 'order.items.move_in': return ` #${d.fromNumber}: ${(d.items ?? []).map((i: any) => i.product).join(', ')}`;
     case 'order.merge': return `: ${(d.merged ?? []).map((m: any) => `#${m.number}${m.tabName ? ` (${m.tabName})` : ''}`).join(', ')}`;
     case 'order.merged_into': return ` #${d.intoNumber}`;
-    case 'order.void_all': return ` — razlog: ${d.reason}`;
-    case 'order.rename': return `: ${d.tabName ?? '—'}`;
+    case 'order.void_all': return ` - razlog: ${d.reason}`;
+    case 'order.rename': return `: ${d.tabName ?? '-'}`;
     default: return '';
   }
 }
 
 /**
  * Štampa računa/predračuna na štampaču ove kase (preko Print Bridge-a).
- * Prikazuje stvarno stanje zadatka iz reda — "poslato u red" nije isto što i "odštampano".
+ * Prikazuje stvarno stanje zadatka iz reda - "poslato u red" nije isto što i "odštampano".
  */
 function PrintReceipt({ orderId, token }: { orderId: string; token?: string }) {
   const [job, setJob] = useState<any>(null);
@@ -170,8 +170,8 @@ function PrintReceipt({ orderId, token }: { orderId: string; token?: string }) {
     catch (e) { setErr(e); } finally { setBusy(false); }
   };
   const LABEL: Record<string, string> = {
-    PENDING: 'u redu — čeka Print Bridge', PRINTING: 'štampa u toku', PRINTED: 'štampač je primio blok',
-    SIMULATED: 'SIMULACIJA — ništa nije odštampano na papiru', FAILED: 'štampa nije uspela',
+    PENDING: 'u redu - čeka Print Bridge', PRINTING: 'štampa u toku', PRINTED: 'štampač je primio blok',
+    SIMULATED: 'SIMULACIJA - ništa nije odštampano na papiru', FAILED: 'štampa nije uspela',
   };
   return (
     <div className="row" style={{ gap: 8, alignItems: 'center', margin: '6px 0' }}>

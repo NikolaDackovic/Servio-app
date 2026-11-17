@@ -1,14 +1,14 @@
 /**
- * Identifikacija kupca na računu — šifre vrste identifikacije iz šifarnika eFiskalizacije.
+ * Identifikacija kupca na računu - šifre vrste identifikacije iz šifarnika eFiskalizacije.
  * Izvor spiska: javno uputstvo knjigovodstvenog softvera koje prenosi šifarnik PU (vidi docs/FISCAL.md).
  * PRE produkcione fiskalizacije uskladiti sa važećim Tehničkim vodičem PU.
  */
 import { Invalid } from './errors';
 
 export const BUYER_ID_TYPES: { code: string; label: string; hint: string }[] = [
-  { code: '10', label: 'PIB', hint: 'Domaće pravno lice — 9 cifara' },
-  { code: '11', label: 'JMBG', hint: 'Domaći preduzetnik (fizičko lice) — 13 cifara' },
-  { code: '12', label: 'PIB i JBKJS', hint: 'Korisnik javnih sredstava — PIB:JBKJS' },
+  { code: '10', label: 'PIB', hint: 'Domaće pravno lice - 9 cifara' },
+  { code: '11', label: 'JMBG', hint: 'Domaći preduzetnik (fizičko lice) - 13 cifara' },
+  { code: '12', label: 'PIB i JBKJS', hint: 'Korisnik javnih sredstava - PIB:JBKJS' },
   { code: '20', label: 'Lična karta', hint: 'Domaće fizičko lice' },
   { code: '21', label: 'Izbeglička legitimacija', hint: 'Domaće fizičko lice' },
   { code: '22', label: 'EBS', hint: 'Strano fizičko lice sa boravkom u Srbiji' },
@@ -24,7 +24,7 @@ export const BUYER_ID_TYPES: { code: string; label: string; hint: string }[] = [
 
 /** Osnovi za opciono polje kupca (npr. oslobođenje od PDV-a). Numeričke šifre se mapiraju pri integraciji sa fiskalizacijom. */
 export const BUYER_OPTIONAL_BASES = [
-  'LNPDV — lice sa pravom na oslobođenje od PDV-a',
+  'LNPDV - lice sa pravom na oslobođenje od PDV-a',
   'Broj ugovora / narudžbenice',
   'Broj polise osiguranja',
   'Drugo',
@@ -61,6 +61,6 @@ export function validateBuyer(type: string, value: string) {
     const [pib, jbkjs] = v.split(':');
     if (!pib || !isValidPib(pib) || !/^\d{5}$/.test(jbkjs ?? '')) throw Invalid('INVALID_PIB_JBKJS', 'Format je PIB:JBKJS (9 cifara : 5 cifara)');
   }
-  if (!/^[A-Za-z0-9:\-\/ ]{3,40}$/.test(v)) throw Invalid('INVALID_BUYER_ID', 'Broj identifikacije: 3–40 znakova (slova, cifre)');
+  if (!/^[A-Za-z0-9:\-\/ ]{3,40}$/.test(v)) throw Invalid('INVALID_BUYER_ID', 'Broj identifikacije: 3-40 znakova (slova, cifre)');
   return v;
 }

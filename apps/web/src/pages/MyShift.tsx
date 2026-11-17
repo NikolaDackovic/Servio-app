@@ -25,7 +25,7 @@ export function MyShift({ onOpenOrder }: { onOpenOrder: (id: string) => void }) 
   if (ended) {
     return (
       <div className="page narrow">
-        <Specification summary={ended.summary} title="Specifikacija pazara — smena završena" />
+        <Specification summary={ended.summary} title="Specifikacija pazara - smena završena" />
         <div className="btn-row no-print">
           <button className="btn" onClick={() => window.print()}>Štampaj (preko pregledača)</button>
           <button className="btn primary" onClick={() => setEnded(null)}>U redu</button>
@@ -53,7 +53,7 @@ export function MyShift({ onOpenOrder }: { onOpenOrder: (id: string) => void }) 
 
   return (
     <div className="page narrow">
-      <Specification summary={s} title={`Moja smena — od ${time(s.startedAt)}`} />
+      <Specification summary={s} title={`Moja smena - od ${time(s.startedAt)}`} />
 
       <div className="card no-print">
         <div className="row-between">
@@ -64,7 +64,7 @@ export function MyShift({ onOpenOrder }: { onOpenOrder: (id: string) => void }) 
             </button>
           )}
         </div>
-        {s.openOrders.length === 0 ? <Empty>Nema otvorenih stolova — smena može da se završi.</Empty> : (
+        {s.openOrders.length === 0 ? <Empty>Nema otvorenih stolova - smena može da se završi.</Empty> : (
           <div className="pick-list">
             {s.openOrders.map((o: any) => (
               <label key={o.id} className={`pick ${selected.includes(o.id) ? 'on' : ''}`}>
@@ -95,7 +95,7 @@ export function Specification({ summary: s, title }: { summary: any; title: stri
   return (
     <div className="card spec">
       <h3>{title}</h3>
-      <div className="muted small">{s.fullName} · {new Date(s.startedAt).toLocaleString('sr-Latn-RS')}{s.endedAt ? ` – ${new Date(s.endedAt).toLocaleString('sr-Latn-RS')}` : ''}</div>
+      <div className="muted small">{s.fullName} · {new Date(s.startedAt).toLocaleString('sr-Latn-RS')}{s.endedAt ? ` - ${new Date(s.endedAt).toLocaleString('sr-Latn-RS')}` : ''}</div>
       <table className="tbl">
         <tbody>
           {s.collected.byMethod.length === 0 && <tr><td colSpan={3} className="muted">Nema naplata u ovoj smeni.</td></tr>}
@@ -109,31 +109,37 @@ export function Specification({ summary: s, title }: { summary: any; title: stri
         <div><span>Storna</span><b>{s.voids.count} · {fmt(s.voids.amount)}</b></div>
         <div><span>Otvoreni računi na zaposlenom</span><b>{s.openOrders.length}</b></div>
       </div>
-      <p className="muted small">TEST režim naplate — nije fiskalni dokument.</p>
+      <p className="muted small">TEST režim naplate - nije fiskalni dokument.</p>
     </div>
   );
 }
 
-export function TransferDialog({ orderIds, onClose, onDone }: { orderIds: string[]; onClose: () => void; onDone: (n: number, name: string) => void }) {
+/**
+ * Prebacivanje računa drugom zaposlenom - zaposleni kao velike pločice.
+ * `token`: radnja se izvodi u ime onoga ko je uneo PIN (Pregled računa); `excludeUserId`: vlasnik računa se ne nudi.
+ */
+export function TransferDialog({ orderIds, onClose, onDone, token, excludeUserId }: {
+  orderIds: string[]; onClose: () => void; onDone: (n: number, name: string) => void; token?: string; excludeUserId?: string;
+}) {
   const { me } = useAuth();
-  const list = useLoad(() => api<any[]>('GET', '/staff/waiters'), []);
+  const list = useLoad(() => api<any[]>('GET', '/staff/waiters', undefined, token), [token]);
   const [to, setTo] = useState('');
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const skip = excludeUserId ?? me?.user.userId;
   const submit = async () => {
     setBusy(true); setError(undefined);
-    try { const r = await api('POST', '/orders/transfer', { orderIds, toUserId: to }); onDone(r.moved.length, r.toName); }
+    try { const r = await api('POST', '/orders/transfer', { orderIds, toUserId: to }, token); onDone(r.moved.length, r.toName); }
     catch (e) { setError(e); } finally { setBusy(false); }
   };
   return (
-    <Modal title={`Prebacivanje ${orderIds.length} računa`} onClose={onClose}>
+    <Modal title={`Prebacivanje ${orderIds.length === 1 ? 'računa' : `${orderIds.length} računa`} - izaberite zaposlenog`} onClose={onClose}>
       {list.loading ? <Spinner /> : list.error ? <ErrorBox error={list.error} /> : (
-        <div className="pick-list">
-          {list.data!.filter((w) => w.id !== me?.user.userId).map((w) => (
-            <label key={w.id} className={`pick ${to === w.id ? 'on' : ''}`}>
-              <input type="radio" name="to" checked={to === w.id} onChange={() => setTo(w.id)} />
-              <span className="pick-main"><strong>{w.fullName}</strong> · {w.roleName}</span>
-            </label>
+        <div className="k-pick-grid">
+          {list.data!.filter((w) => w.id !== skip).map((w) => (
+            <button key={w.id} type="button" className={`k-pick ${to === w.id ? 'on' : ''}`} onClick={() => setTo(w.id)}>
+              <b>{w.fullName}</b><span>{w.roleName}</span>
+            </button>
           ))}
         </div>
       )}

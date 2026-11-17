@@ -1,0 +1,3 @@
+ALTER TABLE "discounts" ADD COLUMN "scope" text DEFAULT 'ALL' NOT NULL;--> statement-breakpoint
+ALTER TABLE "discounts" ADD COLUMN "target_ids" uuid[] DEFAULT '{}'::uuid[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "discounts" ADD CONSTRAINT "discounts_scope" CHECK ("discounts"."scope" IN ('ALL', 'GROUP', 'PRODUCT') AND ("discounts"."scope" = 'ALL' OR cardinality("discounts"."target_ids") > 0));

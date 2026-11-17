@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { ErrorBox, Modal, Spinner, useLoad, useToast } from '../ui';
 import { Shift } from './Shift';
 
-/** Poslovni dan: otvaranje, stanje, zaključak — i smena kase (gotovina) ispod. */
+/** Poslovni dan: otvaranje, stanje, zaključak - i smena kase (gotovina) ispod. */
 export function Day({ onShowDay }: { onShowDay?: (id: string) => void }) {
   const { can } = useAuth();
   const toast = useToast();
@@ -88,7 +88,7 @@ export function Day({ onShowDay }: { onShowDay?: (id: string) => void }) {
             </tbody></table>
           )}
           {(blocked.details as any)?.openShifts && (
-            <ul>{(blocked.details as any).openShifts.map((s: any) => <li key={s.id}>{s.deviceName} — otvorena od {time(s.openedAt)}</li>)}</ul>
+            <ul>{(blocked.details as any).openShifts.map((s: any) => <li key={s.id}>{s.deviceName} - otvorena od {time(s.openedAt)}</li>)}</ul>
           )}
           <div className="modal-actions"><button className="btn primary" onClick={() => setBlocked(null)}>U redu</button></div>
         </Modal>

@@ -1,3 +1,4 @@
+import { locationSettings } from '../settings/settings';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { Tx } from '../../db/db.module';
 import {
@@ -13,6 +14,8 @@ export interface TicketPayload {
   title: string;
   station: string;
   orderNumber: number;
+  /** Velika slova stavki (podešavanje lokala); podrazumevano da. */
+  large?: boolean;
   table: string | null;
   tab: string | null;
   waiter: string;
@@ -32,7 +35,7 @@ async function header(tx: Tx, o: OrderRow) {
 }
 
 /**
- * Pozicija za svaki artikal: pozicija artikla, a ako je nema — pozicija njegove kategorije.
+ * Pozicija za svaki artikal: pozicija artikla, a ako je nema - pozicija njegove kategorije.
  * Uzima se samo aktivna pozicija ISTOG lokala kao porudžbina; inače stavka ostaje nerutirana.
  */
 async function resolveStations(tx: Tx, locationId: string, productIds: string[]) {
@@ -61,14 +64,16 @@ const line = (i: ItemRow): TicketLine => ({ qty: i.quantity, name: i.name, note:
 
 /**
  * Rutiranje jedne ture slanja (u ISTOJ transakciji kao i slanje):
- *  - po jedna KDS kartica po (račun, tura, pozicija) — jedinstveni indeks u bazi,
- *  - po jedan zadatak štampe po (račun, tura, pozicija) — dedupe_key je jedinstven u bazi,
+ *  - po jedna KDS kartica po (račun, tura, pozicija) - jedinstveni indeks u bazi,
+ *  - po jedan zadatak štampe po (račun, tura, pozicija) - dedupe_key je jedinstven u bazi,
  *  - stavke dobijaju snimak pozicije i kartice.
- * Stavke čiji artikal nema poziciju ostaju nerutirane (nema kartice ni štampe) — to se vidi na kasi.
+ * Stavke čiji artikal nema poziciju ostaju nerutirane (nema kartice ni štampe) - to se vidi na kasi.
  */
 export async function routeBatch(tx: Tx, o: OrderRow, batch: number, items: ItemRow[]): Promise<RealtimeEvent[]> {
   const events: RealtimeEvent[] = [];
   const stationOf = await resolveStations(tx, o.locationId, [...new Set(items.map((i) => i.productId))]);
+  const groupPrinter = await groupPrinters(tx, [...new Set(items.map((i) => i.productId))]);
+  const settings = await locationSettings(tx, o.locationId);
   const groups = new Map<string, { station: NonNullable<ReturnType<typeof stationOf.get>>; items: ItemRow[] }>();
   for (const i of items) {
     const st = stationOf.get(i.productId);
@@ -93,14 +98,15 @@ export async function routeBatch(tx: Tx, o: OrderRow, batch: number, items: Item
     await tx.update(orderItems).set({ prepStationId: station.id, kdsTicketId: ticketId })
       .where(inArray(orderItems.id, list.map((i) => i.id)));
 
-    if (station.printerId && station.printerActive) {
+    // Štampač: grupe (ako je zadat) ili kategorije (pozicije); jedna tura može ići na više štampača.
+    for (const [printerId, part] of splitByPrinter(list, station, groupPrinter)) {
       const payload: TicketPayload = {
-        title: 'NARUDŽBINA', station: station.name, orderNumber: o.number, table: h.table, tab: o.tabName,
-        waiter: h.waiter, batch, createdAt: new Date().toISOString(), lines: list.map(line),
+        title: 'NARUDŽBINA', station: station.name, orderNumber: o.number, table: h.table, tab: o.tabName, large: settings.ticketLarge,
+        waiter: h.waiter, batch, createdAt: new Date().toISOString(), lines: part.map(line),
       };
       const [job] = await tx.insert(printJobs).values({
-        locationId: o.locationId, printerId: station.printerId, stationId: station.id, orderId: o.id,
-        kind: 'ORDER_TICKET', dedupeKey: `ticket:${o.id}:${batch}:${station.id}`, payload,
+        locationId: o.locationId, printerId, stationId: station.id, orderId: o.id,
+        kind: 'ORDER_TICKET', dedupeKey: `ticket:${o.id}:${batch}:${station.id}${printerId === station.printerId ? '' : `:${printerId}`}`, payload,
       }).onConflictDoNothing().returning();
       if (job) events.push({ type: 'print.job.created', locationId: o.locationId, data: { jobId: job.id, printerId: job.printerId } });
     }
@@ -109,7 +115,7 @@ export async function routeBatch(tx: Tx, o: OrderRow, batch: number, items: Item
 }
 
 /**
- * Storno poslatih stavki: pozicija dobija STORNO tiket na štampaču (jednom po stavci — dedupe po stavci)
+ * Storno poslatih stavki: pozicija dobija STORNO tiket na štampaču (jednom po stavci - dedupe po stavci)
  * i KDS događaj da je stavka otkazana.
  */
 export async function routeVoids(tx: Tx, o: OrderRow, voided: ItemRow[], reason: string, mode: 'item' | 'all'): Promise<RealtimeEvent[]> {
@@ -127,19 +133,43 @@ export async function routeVoids(tx: Tx, o: OrderRow, voided: ItemRow[], reason:
         events.push({ type: 'kds.item.voided', locationId: o.locationId, stationId: s.id, data: { ticketId: i.kdsTicketId, itemId: i.id } });
       }
     }
-    if (s.printerId && printerActive) {
+    // Storno ide na isti štampač kao porudžbina (štampač grupe ili pozicije).
+    const groupPrinter = await groupPrinters(tx, [...new Set(list.map((i) => i.productId))]);
+    for (const [printerId, part] of splitByPrinter(list, { printerId: s.printerId, printerActive }, groupPrinter)) {
       const payload: TicketPayload = {
         title: 'STORNO', station: s.name, orderNumber: o.number, table: h.table, tab: o.tabName, waiter: h.waiter,
-        batch: null, createdAt: new Date().toISOString(), lines: list.map(line), reason,
+        batch: null, createdAt: new Date().toISOString(), lines: part.map(line), reason,
       };
       // Storno stavke se dešava najviše jednom (stavka je posle VOIDED); storno celog računa takođe (račun je posle CANCELLED).
-      const key = mode === 'item' ? `void:${list[0].id}` : `voidall:${o.id}:${s.id}`;
+      const base = mode === 'item' ? `void:${part[0].id}` : `voidall:${o.id}:${s.id}`;
+      const key = printerId === s.printerId ? base : `${base}:${printerId}`;
       const [job] = await tx.insert(printJobs).values({
-        locationId: o.locationId, printerId: s.printerId, stationId: s.id, orderId: o.id,
+        locationId: o.locationId, printerId, stationId: s.id, orderId: o.id,
         kind: 'VOID_TICKET', dedupeKey: key, payload,
       }).onConflictDoNothing().returning();
       if (job) events.push({ type: 'print.job.created', locationId: o.locationId, data: { jobId: job.id, printerId: job.printerId } });
     }
   }
   return events;
+}
+
+/** Štampač grupe (ADMIN → Štampanje) za svaki artikal, samo ako postoji i aktivan je. */
+async function groupPrinters(tx: Tx, productIds: string[]) {
+  if (!productIds.length) return new Map<string, string>();
+  const rows = await tx.select({ productId: products.id, printerId: categories.printerId, active: printers.active })
+    .from(products).innerJoin(categories, eq(categories.id, products.categoryId))
+    .leftJoin(printers, eq(printers.id, categories.printerId))
+    .where(inArray(products.id, productIds));
+  return new Map(rows.filter((r) => r.printerId && r.active).map((r) => [r.productId, r.printerId as string]));
+}
+
+/** Stavke jedne pozicije podeljene po štampaču: štampač grupe ima prednost, inače štampač pozicije. */
+function splitByPrinter(list: ItemRow[], station: { printerId: string | null; printerActive: boolean | null }, groupPrinter: Map<string, string>) {
+  const out = new Map<string, ItemRow[]>();
+  for (const i of list) {
+    const p = groupPrinter.get(i.productId) ?? (station.printerId && station.printerActive ? station.printerId : null);
+    if (!p) continue;
+    out.set(p, [...(out.get(p) ?? []), i]);
+  }
+  return out;
 }

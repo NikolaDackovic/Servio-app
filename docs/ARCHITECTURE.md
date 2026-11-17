@@ -62,7 +62,7 @@ JWT nosi samo identitet i kontekst (korisnik, organizacija, lokal, uređaj). Ulo
 Svaka izmena porudžbine: transakcija → `SELECT ... FOR UPDATE` na redu porudžbine → izmena → preračun iznosa iz stavki u bazi → `version + 1`. Klijent može poslati `expectedVersion`; neslaganje vraća `409 STALE_ORDER` (dva konobara na istom stolu ne prepisuju jedan drugog). Naplata dodatno koristi idempotency ključ (jedinstven indeks `(order_id, idempotency_key)`).
 
 ### ADR-006: Fiskalizacija iza apstrakcije (iteracija 3)
-`FiscalizationProvider` interfejs (izdavanje, status, provera, retry) sa implementacijama po pružaocu (L-PFR/V-PFR). Interna porudžbina, komercijalni obračun i fiskalni račun su različiti entiteti. Račun se nikad ne prikazuje kao fiskalizovan bez potvrde provajdera. **Trenutno stanje: nije implementirano**; health endpoint vraća `fiscalization: NOT_CONFIGURED`, sva plaćanja su `mode = TEST`.
+`FiscalizationProvider` interfejs (izdavanje, status, provera, retry) sa implementacijama po pružaocu (L-PFR/V-PFR). Interna porudžbina, komercijalni obračun i fiskalni račun su različiti entiteti. Račun se nikad ne prikazuje kao fiskalizovan bez potvrde provajdera. Implementirano: `TestFiscalProvider` i `EsirProvider` (LPFR/VPFR, docs/FISCAL.md); izbor po podešavanju lokala i kasi. Sva plaćanja karticom su `mode = TEST` (nema veze sa terminalom).
 
 ## Režimi rada
 

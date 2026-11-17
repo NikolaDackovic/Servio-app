@@ -4,7 +4,7 @@ import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from './schema';
 import { AppConfig, CONFIG } from '../config';
 
-// numeric (OID 1700) ostaje string — nikada float.
+// numeric (OID 1700) ostaje string - nikada float.
 types.setTypeParser(1700, (v) => v);
 
 export type Db = NodePgDatabase<typeof schema>;

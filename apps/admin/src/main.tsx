@@ -3,8 +3,12 @@ import { createRoot } from 'react-dom/client';
 import { AuthProvider } from '@shared/auth';
 import { ToastProvider } from '@shared/ui';
 import '@shared/styles.css';
+import '@shared/kasa.css';
 import './admin.css';
-import { AdminApp } from './AdminApp';
+import './admin-theme.css';
+import { AdminApp, applySavedTheme } from './AdminApp';
+
+applySavedTheme();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

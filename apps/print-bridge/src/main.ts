@@ -13,8 +13,8 @@ if (!key.startsWith('pb_')) {
   process.exit(1);
 }
 const cp = (process.env.CODEPAGE ?? 'ascii').toLowerCase();
-if (!['ascii', 'cp852', 'cp1250'].includes(cp)) {
-  console.error(`CODEPAGE=${cp} nije podržan (ascii, cp852, cp1250)`);
+if (!['ascii', 'cp852', 'cp1250', 'cp1251'].includes(cp)) {
+  console.error(`CODEPAGE=${cp} nije podržan (ascii, cp852, cp1250, cp1251 = ćirilica)`);
   process.exit(1);
 }
 
@@ -28,7 +28,7 @@ const bridge = new PrintBridge({
 });
 
 bridge.hello()
-  .catch((e) => console.error(`Prvo povezivanje nije uspelo: ${e.message} — nastavljam sa pokušajima.`))
+  .catch((e) => console.error(`Prvo povezivanje nije uspelo: ${e.message} - nastavljam sa pokušajima.`))
   .finally(() => bridge.start());
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

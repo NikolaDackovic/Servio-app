@@ -62,17 +62,19 @@ export async function computeSales(db: DbOrTx, locationId: string, scope: SalesS
   const [loc] = await rows<{ tz: string }>(db, sql`SELECT timezone AS tz FROM locations WHERE id = ${locationId}`);
   const tz = loc.tz;
 
-  let oScope: SQL, pScope: SQL, vScope: SQL;
+  let oScope: SQL, pScope: SQL, vScope: SQL, rScope: SQL;
   if (scope.kind === 'range') {
     const start = sql`(${scope.from}::date)::timestamp AT TIME ZONE ${tz}`;
     const end = sql`((${scope.to}::date) + 1)::timestamp AT TIME ZONE ${tz}`;
     oScope = sql`o.closed_at >= ${start} AND o.closed_at < ${end}`;
     pScope = sql`p.created_at >= ${start} AND p.created_at < ${end}`;
     vScope = sql`i.voided_at >= ${start} AND i.voided_at < ${end}`;
+    rScope = sql`r.created_at >= ${start} AND r.created_at < ${end}`;
   } else {
     oScope = sql`o.business_day_id = ${scope.businessDayId}`;
     pScope = sql`p.business_day_id = ${scope.businessDayId}`;
     vScope = sql`o.business_day_id = ${scope.businessDayId}`;
+    rScope = sql`r.business_day_id = ${scope.businessDayId}`;
   }
   const extra = sql`${f.waiterId ? sql`AND o.waiter_id = ${f.waiterId}` : sql``} ${f.deviceId ? sql`AND o.device_id = ${f.deviceId}` : sql``}`;
   const oFilter = sql`o.location_id = ${locationId} AND o.status = 'PAID' AND ${oScope} ${extra}`;
@@ -119,6 +121,13 @@ export async function computeSales(db: DbOrTx, locationId: string, scope: SalesS
     FROM order_items i JOIN orders o ON o.id = i.order_id
     WHERE o.location_id = ${locationId} AND i.status = 'VOIDED' AND ${vScope} ${extra}`);
 
+  // Povraćaji novca (refundacije) u periodu - umanjuju naplatu
+  const refundsByMethod = await rows<{ method: string; count: number; amount: string }>(db, sql`
+    SELECT r.method, count(*)::int AS count, sum(r.total)::numeric(14,2)::text AS amount
+    FROM refunds r JOIN orders o ON o.id = r.order_id
+    WHERE r.location_id = ${locationId} AND ${rScope} ${extra} GROUP BY r.method ORDER BY r.method`);
+  const refundTotal = sum(refundsByMethod.map((r) => r.amount));
+
   const [open] = await rows<{ count: number; total: string; paid: string }>(db, sql`
     SELECT count(*)::int AS count, coalesce(sum(total),0)::numeric(14,2)::text AS total,
            coalesce(sum(paid_total),0)::numeric(14,2)::text AS paid
@@ -136,14 +145,17 @@ export async function computeSales(db: DbOrTx, locationId: string, scope: SalesS
     taxes: taxSummary,
     discounts: disc,
     payments: {
-      /** Stvarno naplaćeno (novac); reprezentacija nije novac i prikazuje se odvojeno. */
-      total: money(sum(paymentsByMethod.filter((p) => p.method !== 'REPRESENTATION').map((p) => p.amount))),
+      /** Pazar: sve naplate uključujući reprezentaciju (na kuću - regularan račun, pravda se potpisom); reprezentacija i posebno. */
+      total: money(sum(paymentsByMethod.map((p) => p.amount))),
       representation: money(sum(paymentsByMethod.filter((p) => p.method === 'REPRESENTATION').map((p) => p.amount))),
       byMethod: paymentsByMethod,
+      /** Naplaćeno minus povraćaji novca. */
+      net: money(sum(paymentsByMethod.map((p) => p.amount)).sub(refundTotal)),
       containsTestPayments: paymentsByMethod.some((p) => p.mode === 'TEST'),
     },
     byProduct, byWaiter, byHour,
     voids,
+    refunds: { count: refundsByMethod.reduce((a, r) => a + r.count, 0), amount: money(refundTotal), byMethod: refundsByMethod },
     openOrdersNow: open,
   };
 }

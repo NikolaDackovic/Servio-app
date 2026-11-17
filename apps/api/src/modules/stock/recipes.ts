@@ -49,7 +49,7 @@ export class RecipesService {
     lines.forEach((l, i) => {
       const c = comps.find((x) => x.id === l.componentId);
       if (!c) errors.push(`Red ${i + 1}: komponenta ne postoji`);
-      else if (!c.trackStock) errors.push(`Red ${i + 1}: „${c.name}“ nema uključeno vođenje zalihe — ne može da se troši`);
+      else if (!c.trackStock) errors.push(`Red ${i + 1}: „${c.name}“ nema uključeno vođenje zalihe - ne može da se troši`);
       if (dec(normNum(l.quantity)).lte(0)) errors.push(`Red ${i + 1}: količina mora biti veća od 0`);
     });
     if (errors.length) throw Invalid('INVALID_RECIPE', errors.join('; '), { errors });
@@ -87,7 +87,7 @@ export class RecipesService {
     return this.db.transaction(async (tx) => {
       const [r] = await tx.select().from(recipes).where(eq(recipes.id, id)).for('update');
       if (!r) throw NotFound('Normativ');
-      if (r.status !== 'DRAFT') throw Conflict('RECIPE_NOT_DRAFT', 'Aktivan ili povučen normativ se ne menja — napravite novu verziju');
+      if (r.status !== 'DRAFT') throw Conflict('RECIPE_NOT_DRAFT', 'Aktivan ili povučen normativ se ne menja - napravite novu verziju');
       await this.validate(tx, u, r.productId, dto.lines);
       await tx.delete(recipeLines).where(eq(recipeLines.recipeId, id));
       await tx.insert(recipeLines).values(dto.lines.map((l) => ({ recipeId: id, componentId: l.componentId, quantity: q4(dec(normNum(l.quantity))) })));
@@ -104,7 +104,7 @@ export class RecipesService {
       const [p] = await tx.select({ id: products.id }).from(products).where(and(eq(products.id, r.productId), eq(products.organizationId, u.organizationId)));
       if (!p) throw NotFound('Normativ');
       if (r.status === 'ACTIVE') return (await this.list(u, { productId: r.productId }, tx)).find((x) => x.id === id);
-      if (r.status === 'RETIRED') throw Conflict('RECIPE_RETIRED', 'Povučena verzija se ne aktivira ponovo — napravite novu verziju');
+      if (r.status === 'RETIRED') throw Conflict('RECIPE_RETIRED', 'Povučena verzija se ne aktivira ponovo - napravite novu verziju');
       await tx.execute(sql`SELECT id FROM products WHERE id = ${r.productId} FOR UPDATE`);
       await tx.update(recipes).set({ status: 'RETIRED', retiredAt: new Date() }).where(and(eq(recipes.productId, r.productId), eq(recipes.status, 'ACTIVE')));
       await tx.update(recipes).set({ status: 'ACTIVE', activatedAt: new Date() }).where(eq(recipes.id, id));

@@ -28,7 +28,16 @@ Osnovna putanja: `/api/v1`. Interaktivna dokumentacija (OpenAPI/Swagger): `http:
 | GET `/products?categoryId&search&includeInactive&page&pageSize` | catalog.read | |
 | POST `/products`, PATCH `/products/:id` | catalog.write | Promena cene se beleži u istoriji |
 | GET `/products/:id/price-history` | catalog.read | |
-| GET `/tables`, POST `/tables` | table.read / table.write | Stanje stola izvedeno iz otvorenih računa |
+| PUT `/products/:id/image`, DELETE `/products/:id/image` | catalog.write | Slika artikla za kasu: `{ dataUrl }` (PNG/JPEG/WEBP, najviše 300 KB; ADMIN je umanji na 256 px). Greške 422 `INVALID_IMAGE`, `IMAGE_TOO_LARGE` |
+| GET `/products/:id/image?v=…` | javno | Slika (bez tokena, jer je `<img>` ne šalje); keš godinu dana, verzija u `?v=` (`imageAt` iz liste artikala) |
+| GET `/auth/kasa` | javno | Kasa jednog lokala: kada postoji tačno jedan lokal, vraća njegovu prvu aktivnu POS kasu — kasa nudi samo PIN prijavu (bez emaila i izbora uređaja) |
+| POST `/orders/:id/move-table` | order.write | Ceo račun prelazi na drugi sto `{ toTableId, expectedVersion }` (gost se premestio); kada se `move-items` prebace sve žive stavke, izvorni račun se sam zatvara (MERGED, ili CANCELLED ako ima storna) |
+| GET `/orders?nonEmpty=true` | order.read | Samo računi sa bar jednom stavkom (prazan — otvoren pa napušten sto — se ne prikazuje; kasa ga pri izlasku sa stola zatvara) |
+| POST `/shifts/close` | shift.manage | `countedCash` je opciono (podrazumevano očekivana gotovina). 409 `SHIFT_HAS_OPEN_ORDERS` dok u lokalu postoji nenaplaćen sto; prazni otvoreni računi se zatvaraju |
+| POST `/staff-shifts/current/print` | order.read | Štampa pazara (specifikacija smene prijavljenog) na štampaču računa kase, `{ idempotencyKey }`; zadatak `SHIFT_REPORT` |
+| GET `/tables`, POST `/tables` | table.read / table.write | Stanje stola izvedeno iz otvorenih računa; sto ima `posX`, `posY`, `width`, `height`, `shape` (`RECT`/`ROUND`). Novi sto sa imenom obrisanog vraća obrisani |
+| PATCH `/tables/:id`, DELETE `/tables/:id` | table.write | Izmena (naziv, prostorija, mesta, oblik, veličina, pozicija); brisanje = deaktivacija, 409 `TABLE_HAS_OPEN_ORDERS` dok je račun otvoren; 409 `TABLE_NAME_TAKEN` |
+| PUT `/tables/layout` | table.write | Raspored iz editora mape: `{ tables: [{ id, posX, posY, width, height }] }` u jednoj transakciji |
 | GET `/orders?status&tableId&businessDayId&waiterId&mine&page&pageSize` | order.read | Konobar vidi samo svoje bez `order.read_all` |
 | POST `/orders` | order.write | `{ tableId?, guests?, note?, idempotencyKey? }` |
 | GET `/orders/:id` | order.read | Stavke, plaćanja, preostalo, PDV rekapitulacija |
@@ -115,7 +124,7 @@ Pristup: aktivni korisnik sa `order.read` ili `kds.use` (provera u bazi pri pove
 | GET `/import/:entity/template?format=csv\|xlsx` | stock.write | Šablon |
 | GET `/export/{products\|partners\|stock-balances}?format=csv\|xlsx&warehouseId` | stock.read | Izvoz (CSV: `;`, decimalni zarez, UTF-8 BOM) |
 
-`GET /products` prima i `sellable=true|false` i `trackStock=true`; artikal ima `trackStock`, `isSellable`. Dodavanje sirovine na račun → 422 `PRODUCT_NOT_SELLABLE`.
+Artikal ima `noteOptions` (niz, najviše 24 × 40 znakova): izmene koje kasa nudi čim se artikal otkuca (npr. „Bez leda“); izabrane postaju napomena stavke. `GET /products` prima i `sellable=true|false` i `trackStock=true`; artikal ima `trackStock`, `isSellable`. Dodavanje sirovine na račun → 422 `PRODUCT_NOT_SELLABLE`.
 
 ## Primer: kafa za sto i kombinovana naplata
 ```bash

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '@shared/api';
 import { Empty, ErrorBox, Spinner, useLoad, useToast } from '@shared/ui';
 import { fq, PickProduct, ProductPicker } from './stockShared';
+import { Column, DataTable } from './DataTable';
 
 interface RecipeLine { componentId: string; componentName: string; componentCode: string; unit: string; quantity: string }
 interface Recipe { id: string; productId: string; productName: string; productCode: string; version: number; status: 'DRAFT' | 'ACTIVE' | 'RETIRED'; note: string | null; createdBy: string; createdAt: string; activatedAt: string | null; retiredAt: string | null; lines: RecipeLine[] }
@@ -16,28 +17,22 @@ export function Recipes() {
   for (const r of all.data ?? []) byProduct.set(r.productId, [...(byProduct.get(r.productId) ?? []), r]);
   return (
     <div className="page">
-      <div className="toolbar"><h2 style={{ margin: 0, flex: 1 }}>Normativi</h2></div>
-      <p className="muted">Normativ određuje šta se automatski skida sa lagera kada se artikal naplati (npr. Espresso → 0,008 kg kafe). Artikal bez normativa troši sam sebe ako ima vođenje zalihe; inače se ništa ne troši.</p>
+      <p className="muted">Normativ određuje šta se automatski skida sa lagera kada se artikal naplati (npr. Espresso → 0,008 espresso KG). Artikal bez normativa troši sam sebe ako se prati zaliha; inače se ništa ne troši.</p>
       <div className="toolbar">
         <div style={{ flex: 1, minWidth: 280 }}>
-          <ProductPicker filter="sellable=true" placeholder="Artikal za prodaju: šifra ili naziv…" onPick={(p: PickProduct) => setProduct({ id: p.id, label: `${p.code} ${p.name}` })} />
+          <ProductPicker filter="sellable=true" placeholder="Novi normativ - artikal za prodaju: šifra ili naziv…" onPick={(p: PickProduct) => setProduct({ id: p.id, label: `${p.code} ${p.name}` })} />
         </div>
       </div>
-      {all.error ? <ErrorBox error={all.error} onRetry={all.reload} /> : !all.data ? <Spinner /> : !byProduct.size ? <Empty>Nema normativa.</Empty> : (
-        <table className="tbl clickable">
-          <thead><tr><th>Artikal</th><th>Aktivna verzija</th><th>Sastav (za 1 kom)</th><th>Nacrti</th></tr></thead>
-          <tbody>{[...byProduct.values()].map((list) => {
-            const a = list.find((r) => r.status === 'ACTIVE');
-            const p = list[0];
-            return (
-              <tr key={p.productId} onClick={() => setProduct({ id: p.productId, label: `${p.productCode} ${p.productName}` })}>
-                <td><code>{p.productCode}</code> {p.productName}</td>
-                <td>{a ? `v${a.version}` : <span className="warn-text">nema aktivne</span>}</td>
-                <td className="small">{a?.lines.map((l) => `${fq(l.quantity)} ${l.unit} ${l.componentName}`).join(' + ') ?? ''}</td>
-                <td>{list.filter((r) => r.status === 'DRAFT').length || ''}</td>
-              </tr>);
-          })}</tbody>
-        </table>
+      {all.error ? <ErrorBox error={all.error} onRetry={all.reload} /> : !all.data ? <Spinner /> : (
+        <DataTable rows={[...byProduct.values()]} rowKey={(l) => l[0].productId} empty="Nema normativa."
+          onRowClick={(l) => setProduct({ id: l[0].productId, label: `${l[0].productCode} ${l[0].productName}` })} columns={[
+            { key: 'code', label: 'Šifra', value: (l) => l[0].productCode, width: 90 },
+            { key: 'name', label: 'Artikal', value: (l) => l[0].productName, render: (l) => <strong>{l[0].productName}</strong> },
+            { key: 'ver', label: 'Aktivna verzija', value: (l) => { const a = l.find((r) => r.status === 'ACTIVE'); return a ? `v${a.version}` : 'nema aktivne'; }, filter: 'select',
+              render: (l) => { const a = l.find((r) => r.status === 'ACTIVE'); return a ? `v${a.version}` : <span className="warn-text">nema aktivne</span>; } },
+            { key: 'lines', label: 'Sastav (za 1 kom)', value: (l) => l.find((r) => r.status === 'ACTIVE')?.lines.map((x) => `${fq(x.quantity)} ${x.unit} ${x.componentName}`).join(' + ') ?? '' },
+            { key: 'drafts', label: 'Nacrti', value: (l) => l.filter((r) => r.status === 'DRAFT').length || '', align: 'right' },
+          ] as Column<Recipe[]>[]} />
       )}
     </div>
   );
@@ -99,7 +94,7 @@ function ProductRecipes({ product, onBack }: { product: { id: string; label: str
               <span className="muted small">{r.createdBy} · {new Date(r.createdAt).toLocaleString('sr-Latn-RS')}{r.activatedAt ? ` · aktiviran ${new Date(r.activatedAt).toLocaleString('sr-Latn-RS')}` : ''}{r.retiredAt ? ` · povučen ${new Date(r.retiredAt).toLocaleString('sr-Latn-RS')}` : ''}</span>
             </div>
             {r.note && <div className="muted small">{r.note}</div>}
-            <ul>{r.lines.map((l) => <li key={l.componentId}>{fq(l.quantity)} {l.unit} — <code>{l.componentCode}</code> {l.componentName}</li>)}</ul>
+            <ul>{r.lines.map((l) => <li key={l.componentId}>{fq(l.quantity)} {l.unit} - <code>{l.componentCode}</code> {l.componentName}</li>)}</ul>
             <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
               {r.status === 'DRAFT' && <button className="btn" onClick={() => setEdit({ id: r.id, note: r.note ?? '', lines: r.lines.map((l) => ({ componentId: l.componentId, label: `${l.componentCode} ${l.componentName}`, unit: l.unit, quantity: l.quantity.replace(/\.?0+$/, '') })) })}>Izmeni</button>}
               {r.status === 'DRAFT' && <button className="btn primary" disabled={busy} onClick={() => confirm(`Aktivirati v${r.version}? Prethodna aktivna verzija se povlači; od sada se troši po ovoj verziji.`) && act(() => api('POST', `/recipes/${r.id}/activate`, {}), `Verzija ${r.version} je aktivna`)}>Aktiviraj</button>}

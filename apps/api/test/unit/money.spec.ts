@@ -1,6 +1,6 @@
 import { dec, lineTotal, money, qty, sum, taxFromGross, isDecimalString } from '../../src/common/money';
 
-describe('money — decimalna aritmetika i zaokruživanje', () => {
+describe('money - decimalna aritmetika i zaokruživanje', () => {
   it('nema floating-point grešaka (0.1 + 0.2)', () => {
     expect(money(sum(['0.1', '0.2']))).toBe('0.30');
     expect(money(sum(Array(10).fill('0.10')))).toBe('1.00');

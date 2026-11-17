@@ -7,7 +7,7 @@ import { Invalid } from '../../common/errors';
 import { D, Dec, dec } from '../../common/money';
 
 /**
- * Jezgro lagera. JEDINO mesto koje menja stock_balances — uvek zajedno sa upisom kretanja u karticu.
+ * Jezgro lagera. JEDINO mesto koje menja stock_balances - uvek zajedno sa upisom kretanja u karticu.
  *
  * Prosečna ponderisana nabavna cena (PPNC):
  *  - ulaz (q > 0) po ceni c:      novaCena = (stanje × prosek + q × c) / (stanje + q);  ako je stanje ≤ 0 → novaCena = c
@@ -27,7 +27,7 @@ export interface MoveInput {
   quantity: Dec;
   /** ulaz: nabavna cena; izlaz: izostaviti (koristi se prosek) ili cena originalnog ulaza kod storna */
   unitCost?: Dec;
-  source: 'DOCUMENT' | 'SALE' | 'REVERSAL';
+  source: 'DOCUMENT' | 'SALE' | 'REVERSAL' | 'REFUND';
   allowNegative: boolean;
   documentId?: string | null;
   documentLineId?: string | null;
@@ -35,12 +35,14 @@ export interface MoveInput {
   orderItemId?: string | null;
   recipeId?: string | null;
   reversesMovementId?: string | null;
+  /** povraćaj robe pri refundaciji računa */
+  refundId?: string | null;
   userId: string | null;
   /** za poruku o grešci */
   productName?: string;
 }
 
-/** Zaključava redove stanja u stalnom redosledu (skladište, artikal) — sprečava međusobno blokiranje transakcija. */
+/** Zaključava redove stanja u stalnom redosledu (skladište, artikal) - sprečava međusobno blokiranje transakcija. */
 export async function lockBalances(tx: Tx, pairs: { warehouseId: string; productId: string }[]) {
   const uniq = [...new Map(pairs.map((p) => [`${p.warehouseId}|${p.productId}`, p])).values()]
     .sort((a, b) => (a.warehouseId + a.productId).localeCompare(b.warehouseId + b.productId));
@@ -81,7 +83,7 @@ export async function applyMovement(tx: Tx, m: MoveInput) {
     quantity: q4(m.quantity), unitCost: q4(unitCost), value: m2(m.quantity.mul(unitCost)),
     balanceAfter: q4(newQty), avgCostAfter: q4(newAvg), source: m.source,
     documentId: m.documentId ?? null, documentLineId: m.documentLineId ?? null, orderId: m.orderId ?? null,
-    orderItemId: m.orderItemId ?? null, recipeId: m.recipeId ?? null, reversesMovementId: m.reversesMovementId ?? null,
+    orderItemId: m.orderItemId ?? null, recipeId: m.recipeId ?? null, reversesMovementId: m.reversesMovementId ?? null, refundId: m.refundId ?? null,
     createdById: m.userId,
   }).returning();
   return row;
@@ -99,7 +101,7 @@ export async function defaultWarehouse(tx: Tx, locationId: string) {
  *  - artikal bez normativa sa vođenjem zalihe → troši se sam artikal
  *  - ostalo → nema utroška
  * Skladište: skladište pripremne pozicije stavke (ili artikla/kategorije), inače podrazumevano skladište lokala.
- * Idempotentno: jedinstveni indeks (stavka, artikal) za izvor SALE — ponovljen poziv ne troši dvaput.
+ * Idempotentno: jedinstveni indeks (stavka, artikal) za izvor SALE - ponovljen poziv ne troši dvaput.
  * Prodaja SME da ode u minus (roba je fizički izdata); minus se vidi u stanju i kartici.
  */
 export async function consumeForOrder(tx: Tx, orderId: string, userId: string) {
@@ -133,7 +135,7 @@ export async function consumeForOrder(tx: Tx, orderId: string, userId: string) {
       ? comps.map((c) => ({ productId: c.componentId, qty: dec(i.quantity).mul(dec(c.quantity)), recipeId: c.recipeId, name: c.componentName }))
       : i.trackStock ? [{ productId: i.productId, qty: dec(i.quantity), recipeId: null as string | null, name: i.productName }] : [];
     if (lines.length && !wh) {
-      throw Invalid('NO_WAREHOUSE', 'Lokal nema podrazumevano skladište — utrošak ne može da se evidentira (ADMIN → Skladišta)');
+      throw Invalid('NO_WAREHOUSE', 'Lokal nema podrazumevano skladište - utrošak ne može da se evidentira (ADMIN → Skladišta)');
     }
     for (const l of lines) {
       const qty = dec(q4(l.qty));

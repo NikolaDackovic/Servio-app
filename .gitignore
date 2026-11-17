@@ -5,3 +5,6 @@ dist/
 coverage/
 pgdata/
 simulated-output/
+# desktop (instalacija kase)
+apps/desktop/resources/
+apps/desktop/release/

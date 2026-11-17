@@ -26,6 +26,8 @@ class ImportDto {
   @IsOptional() @IsUUID() documentId?: string;
   /** commit: preskoči neispravne redove (inače se uvoz sa greškama odbija u celosti) */
   @IsOptional() @IsBoolean() skipInvalid?: boolean;
+  /** artikli: grupe kojih nema se prave pri uvozu (prelazak sa drugog programa) */
+  @IsOptional() @IsBoolean() createCategories?: boolean;
 }
 class ExportQuery {
   @IsOptional() @IsIn(['csv', 'xlsx']) format?: 'csv' | 'xlsx';
@@ -34,13 +36,13 @@ class ExportQuery {
 
 const COLS: Record<Entity, ColumnDef[]> = {
   products: [
-    { key: 'code', label: 'Šifra', aliases: ['sifra', 'code', 'sif'], required: true },
-    { key: 'name', label: 'Naziv', aliases: ['name', 'artikal'], required: true },
-    { key: 'category', label: 'Kategorija', aliases: ['category', 'grupa'], required: true },
-    { key: 'tax', label: 'PDV oznaka', aliases: ['pdv', 'tax', 'poreskaoznaka', 'oznaka'], required: true },
-    { key: 'price', label: 'Cena', aliases: ['price', 'prodajnacena', 'mpcena'], required: true },
-    { key: 'unit', label: 'Jedinica mere', aliases: ['jm', 'unit', 'jedinica'], required: false },
-    { key: 'barcode', label: 'Barkod', aliases: ['barcode', 'ean'], required: false },
+    { key: 'code', label: 'Šifra', aliases: ['sifra', 'code', 'sif', 'sifraartikla', 'sifraproizvoda', 'sifart', 'plu'], required: true },
+    { key: 'name', label: 'Naziv', aliases: ['name', 'artikal', 'artikl', 'nazivartikla', 'nazivproizvoda', 'proizvod', 'opis', 'naziv artikla'], required: true },
+    { key: 'category', label: 'Kategorija', aliases: ['category', 'grupa', 'grupaartikala', 'grupaproizvoda', 'podgrupa', 'kategorijaartikla'], required: true },
+    { key: 'tax', label: 'PDV oznaka', aliases: ['pdv', 'tax', 'poreskaoznaka', 'oznaka', 'pdvstopa', 'stopapdv', 'stopa', 'poreskastopa', 'tarifa', 'pdvoznaka', 'pdv%'], required: true },
+    { key: 'price', label: 'Cena', aliases: ['price', 'prodajnacena', 'mpcena', 'mpc', 'cenasapdv', 'maloprodajnacena', 'prodajna', 'cenamp', 'cenamaloprodajna'], required: true },
+    { key: 'unit', label: 'Jedinica mere', aliases: ['jm', 'unit', 'jedinica', 'jmere', 'jedmere', 'mera', 'jedinicamere'], required: false },
+    { key: 'barcode', label: 'Barkod', aliases: ['barcode', 'ean', 'bar', 'barkod', 'gtin', 'ean13'], required: false },
     { key: 'trackStock', label: 'Lager', aliases: ['vodizalihu', 'zaliha', 'trackstock'], required: false },
     { key: 'isSellable', label: 'Prodaja', aliases: ['prodaje', 'nakasi', 'sellable'], required: false },
   ],
@@ -65,9 +67,9 @@ const COLS: Record<Entity, ColumnDef[]> = {
 export interface RowResult { row: number; values: Record<string, string>; action: 'create' | 'update' | null; errors: string[]; data?: any }
 
 /**
- * Uvoz: (1) pregled — svaki red se proverava i prikazuje šta će se desiti (novi / izmena) i greške;
- * (2) potvrda — isti fajl se ponovo proverava u transakciji; ako ima grešaka uvoz se odbija u celosti,
- * osim ako korisnik izričito izabere "preskoči neispravne" — tada izveštaj navodi tačno koji redovi su preskočeni.
+ * Uvoz: (1) pregled - svaki red se proverava i prikazuje šta će se desiti (novi / izmena) i greške;
+ * (2) potvrda - isti fajl se ponovo proverava u transakciji; ako ima grešaka uvoz se odbija u celosti,
+ * osim ako korisnik izričito izabere "preskoči neispravne" - tada izveštaj navodi tačno koji redovi su preskočeni.
  * Ništa se ne preskače "tiho".
  */
 @Injectable()
@@ -86,7 +88,7 @@ export class ImportExportService {
       row: r.rowNumber, action: null, errors: [],
       values: Object.fromEntries(defs.filter((d) => idx[d.key] !== undefined).map((d) => [d.key, r.cells[idx[d.key]] ?? ''])),
     }));
-    if (entity === 'products') await this.checkProducts(tx, u, results);
+    if (entity === 'products') await this.checkProducts(tx, u, results, !!dto.createCategories);
     else if (entity === 'partners') await this.checkPartners(tx, u, results);
     else await this.checkLines(tx, u, results, dto.documentId);
     const invalid = results.filter((r) => r.errors.length).length;
@@ -96,6 +98,7 @@ export class ImportExportService {
       creates: results.filter((r) => !r.errors.length && r.action === 'create').length,
       updates: results.filter((r) => !r.errors.length && r.action === 'update').length,
       rows: results,
+      newCategories: [...new Set(results.filter((r) => !r.errors.length && r.data?.newCategory).map((r) => r.data.newCategory as string))],
     };
   }
 
@@ -110,7 +113,7 @@ export class ImportExportService {
     }
   }
 
-  private async checkProducts(tx: Tx | Db, u: AuthUser, results: RowResult[]) {
+  private async checkProducts(tx: Tx | Db, u: AuthUser, results: RowResult[], createCategories = false) {
     const cats = await tx.select().from(categories).where(eq(categories.organizationId, u.organizationId));
     const taxes = await tx.select().from(taxRates).where(and(eq(taxRates.organizationId, u.organizationId), eq(taxRates.active, true)));
     const codes = results.map((r) => r.values.code?.trim()).filter(Boolean);
@@ -124,9 +127,16 @@ export class ImportExportService {
       else if (code.length > 32) r.errors.push('Šifra je duža od 32 znaka');
       if (!v.name?.trim()) r.errors.push('Naziv je obavezan');
       const cat = cats.find((c) => normHeader(c.name) === normHeader(v.category ?? ''));
-      if (!cat) r.errors.push(`Kategorija „${v.category ?? ''}“ ne postoji (napravite je u ADMIN-u pre uvoza)`);
-      const tax = taxes.find((t) => t.label.toLowerCase() === (v.tax ?? '').trim().toLowerCase());
-      if (!tax) r.errors.push(`PDV oznaka „${v.tax ?? ''}“ ne postoji (dozvoljeno: ${taxes.map((t) => t.label).join(', ')})`);
+      const newCategory = !cat && createCategories && v.category?.trim() ? v.category.trim().slice(0, 60) : null;
+      if (!cat && !newCategory) r.errors.push(`Grupa „${v.category ?? ''}“ ne postoji - napravite je u ADMIN-u ili štiklirajte „Napravi grupe koje ne postoje“`);
+      // PDV: oznaka (Đ, E, A… ili ćirilica Ђ, Е, А) ili stopa (20, 20%, 10,00)
+      const tv = (v.tax ?? '').trim();
+      const CYR: Record<string, string> = { 'ђ': 'đ', 'е': 'e', 'а': 'a', 'г': 'g', 'ж': 'ž' };
+      const lab = (CYR[tv.toLowerCase()] ?? tv.toLowerCase());
+      const rateNum = Number(tv.replace('%', '').replace(',', '.').trim());
+      const tax = taxes.find((t) => t.label.toLowerCase() === lab)
+        ?? (tv !== '' && Number.isFinite(rateNum) ? taxes.find((t) => Number(t.rate) === rateNum) : undefined);
+      if (!tax) r.errors.push(`PDV „${tv}“ nije prepoznat (oznake: ${taxes.map((t) => t.label).join(', ')}; ili stopa: ${[...new Set(taxes.map((t) => Number(t.rate)))].join(', ')})`);
       const price = parseNumber(v.price ?? '');
       if (price === null || dec(price).lt(0) || !/^\d+(\.\d{1,2})?$/.test(price)) r.errors.push(`Cena „${v.price ?? ''}“ nije ispravna (najviše 2 decimale, ≥ 0)`);
       const track = v.trackStock !== undefined ? parseBool(v.trackStock) : false;
@@ -137,7 +147,7 @@ export class ImportExportService {
       const ex = existing.find((e) => e.code === code);
       r.action = ex ? 'update' : 'create';
       r.data = {
-        id: ex?.id, oldPrice: ex?.price, code, name: v.name?.trim(), categoryId: cat?.id, taxRateId: tax?.id, price: price ? money(price) : null,
+        id: ex?.id, oldPrice: ex?.price, code, name: v.name?.trim(), categoryId: cat?.id, newCategory, taxRateId: tax?.id, price: price ? money(price) : null,
         unit: v.unit?.trim() || 'kom', barcode: v.barcode?.trim() || null, trackStock: !!track, isSellable: sell !== false,
       };
     }
@@ -185,7 +195,7 @@ export class ImportExportService {
       else if (d.kind !== 'STOCKTAKE' && dec(q).lte(0)) r.errors.push('Količina mora biti veća od 0');
       const c = v.unitCost ? parseNumber(v.unitCost) : null;
       if (v.unitCost && (c === null || !/^\d+(\.\d{1,4})?$/.test(c))) r.errors.push(`Nabavna cena „${v.unitCost}“ nije ispravna`);
-      if (d.kind === 'RECEIPT' && !v.unitCost) r.errors.push('Nabavna cena je obavezna na prijemnici');
+      if ((d.kind === 'RECEIPT' || d.kind === 'RECEIPT_NOTE') && !v.unitCost) r.errors.push('Nabavna cena je obavezna na prijemnici');
       r.action = 'create';
       r.data = { productId: p?.id, quantity: q, unitCost: c, note: v.note?.trim() || null };
     }
@@ -206,8 +216,15 @@ export class ImportExportService {
       if (!ok.length) throw Invalid('NOTHING_TO_IMPORT', 'Nema ispravnih redova za uvoz');
       let created = 0; let updated = 0;
       if (entity === 'products') {
+        // nove grupe (jedna po nazivu) pre artikala
+        const made = new Map<string, string>();
+        for (const name of a.newCategories) {
+          const [c] = await tx.insert(categories).values({ organizationId: u.organizationId, name }).returning({ id: categories.id });
+          made.set(name, c.id);
+        }
         for (const x of ok) {
           const d = x.data;
+          if (!d.categoryId && d.newCategory) d.categoryId = made.get(d.newCategory);
           if (d.id) {
             await tx.update(products).set({ name: d.name, categoryId: d.categoryId, taxRateId: d.taxRateId, price: d.price, unit: d.unit, barcode: d.barcode, trackStock: d.trackStock, isSellable: d.isSellable, updatedAt: new Date() }).where(eq(products.id, d.id));
             if (d.oldPrice !== d.price) await tx.insert(productPriceChanges).values({ productId: d.id, oldPrice: d.oldPrice, newPrice: d.price, userId: u.userId });

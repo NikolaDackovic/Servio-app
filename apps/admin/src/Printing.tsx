@@ -11,14 +11,13 @@ const CONN: Record<Printer['connection'], string> = { SIMULATED: 'Simulacija (be
 const KIND: Record<Station['kind'], string> = { BAR: 'Šank', KITCHEN: 'Kuhinja', OTHER: 'Ostalo' };
 const JOB_STATUS: Record<string, string> = { PENDING: 'Čeka', PRINTING: 'U štampi', PRINTED: 'Odštampano', SIMULATED: 'Simulirano', FAILED: 'Neuspešno' };
 const JOB_KIND: Record<string, string> = { ORDER_TICKET: 'Porudžbina', VOID_TICKET: 'Storno', RECEIPT: 'Račun', TEST_PAGE: 'Probna strana' };
-const dt = (s: string | null) => (s ? new Date(s).toLocaleString('sr-Latn-RS') : '—');
+const dt = (s: string | null) => (s ? new Date(s).toLocaleString('sr-Latn-RS') : '-');
 
 /** Štampa i KDS: pripremne pozicije i rutiranje, štampači, Print Bridge, red štampe. */
 export function Printing() {
   const [tab, setTab] = useState<'stations' | 'printers' | 'devices' | 'jobs'>('stations');
   return (
     <div className="page">
-      <div className="toolbar"><h2 style={{ margin: 0, flex: 1 }}>Štampa i KDS</h2></div>
       <div className="seg">
         <button className={`seg-btn ${tab === 'stations' ? 'on' : ''}`} onClick={() => setTab('stations')}>Pozicije i rutiranje</button>
         <button className={`seg-btn ${tab === 'printers' ? 'on' : ''}`} onClick={() => setTab('printers')}>Štampači</button>
@@ -49,7 +48,7 @@ function Stations() {
     <>
       <p className="muted">Pripremna pozicija prima stavke posle dugmeta „Pošalji“ na kasi: kartica na KDS ekranu i/ili blok na štampaču pozicije. Artikal ide na poziciju svoje kategorije, osim ako u „Artikli i cene“ nema sopstvenu poziciju.</p>
       <div className="toolbar"><h3 style={{ margin: 0, flex: 1 }}>Pozicije</h3><button className="btn primary" onClick={() => setEdit('new')}>+ Nova pozicija</button></div>
-      {!st.data.length ? <Empty>Nema pozicija — stavke se ne šalju ni na KDS ni na štampu.</Empty> : (
+      {!st.data.length ? <Empty>Nema pozicija - stavke se ne šalju ni na KDS ni na štampu.</Empty> : (
         <table className="tbl clickable">
           <thead><tr><th>Naziv</th><th>Vrsta</th><th>Štampač</th><th>KDS</th><th>Status</th></tr></thead>
           <tbody>{st.data.map((s) => (
@@ -69,7 +68,7 @@ function Stations() {
           <tr key={c.id}>
             <td>{c.name}</td>
             <td><select className="input" value={c.prepStationId ?? ''} onChange={(e) => routeCat(c, e.target.value)}>
-              <option value="">— bez pozicije (ne šalje se) —</option>
+              <option value="">- bez pozicije (ne šalje se) -</option>
               {st.data!.filter((s) => s.active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select></td>
           </tr>))}
@@ -99,7 +98,7 @@ function StationForm({ station, printers, onClose, onSaved }: { station: Station
         <label>Vrsta<select className="input" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as any })}>
           {Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
         <label>Štampač<select className="input" value={f.printerId} onChange={(e) => setF({ ...f, printerId: e.target.value })}>
-          <option value="">— bez štampe —</option>
+          <option value="">- bez štampe -</option>
           {printers.filter((p) => p.active).map((p) => <option key={p.id} value={p.id}>{p.name} ({CONN[p.connection]})</option>)}</select></label>
         <label className="check"><input type="checkbox" checked={f.kdsEnabled} onChange={(e) => setF({ ...f, kdsEnabled: e.target.checked })} /> Prikaz na KDS ekranu</label>
         {station && <label className="check"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Aktivna</label>}
@@ -115,14 +114,14 @@ function Printers() {
   const pr = useLoad(() => api<Printer[]>('GET', '/printers'), []);
   const [edit, setEdit] = useState<Printer | 'new' | null>(null);
   const test = async (p: Printer) => {
-    try { await api('POST', `/printers/${p.id}/test`, {}); toast('ok', `Probna strana je u redu štampe za „${p.name}“ — stanje pogledajte u „Red štampe“`); }
+    try { await api('POST', `/printers/${p.id}/test`, {}); toast('ok', `Probna strana je u redu štampe za „${p.name}“ - stanje pogledajte u „Red štampe“`); }
     catch (e: any) { toast('err', e.message); }
   };
   if (pr.error) return <ErrorBox error={pr.error} onRetry={pr.reload} />;
   if (!pr.data) return <Spinner />;
   return (
     <>
-      <p className="muted">Štampu izvršava <strong>Print Bridge</strong> na računaru u lokalu (apps/print-bridge). Bez pokrenutog bridge-a zadaci ostaju u redu sa statusom „Čeka“. „Simulacija“ ništa ne štampa na papiru — zadatak dobija status „Simulirano“.</p>
+      <p className="muted">Štampu izvršava <strong>Print Bridge</strong> na računaru u lokalu (apps/print-bridge). Bez pokrenutog bridge-a zadaci ostaju u redu sa statusom „Čeka“. „Simulacija“ ništa ne štampa na papiru - zadatak dobija status „Simulirano“.</p>
       <div className="toolbar"><h3 style={{ margin: 0, flex: 1 }}>Štampači</h3><button className="btn primary" onClick={() => setEdit('new')}>+ Novi štampač</button></div>
       {!pr.data.length ? <Empty>Nema štampača.</Empty> : (
         <table className="tbl clickable">
@@ -130,7 +129,7 @@ function Printers() {
           <tbody>{pr.data.map((p) => (
             <tr key={p.id} onClick={() => setEdit(p)}>
               <td><strong>{p.name}</strong></td><td>{CONN[p.connection]}</td>
-              <td>{p.connection === 'NETWORK_ESCPOS' ? `${p.host}:${p.port}` : p.connection === 'WINDOWS_RAW' ? p.windowsName : '—'}</td>
+              <td>{p.connection === 'NETWORK_ESCPOS' ? `${p.host}:${p.port}` : p.connection === 'WINDOWS_RAW' ? p.windowsName : '-'}</td>
               <td>{p.paperWidth} mm</td>
               <td>{p.active ? <span className="badge paid">Aktivan</span> : <span className="badge cancelled">Isključen</span>}</td>
               <td><button className="btn sm" onClick={(e) => { e.stopPropagation(); test(p); }}>Probna strana</button></td>
@@ -219,9 +218,9 @@ function Devices() {
         <thead><tr><th>Uređaj</th><th>Vrsta</th><th>Štampač računa</th></tr></thead>
         <tbody>{pos.map((d) => (
           <tr key={d.id}><td>{d.name}</td><td>{d.kind}</td>
-            <td>{d.kind === 'KDS' ? <span className="muted">—</span> : (
+            <td>{d.kind === 'KDS' ? <span className="muted">-</span> : (
               <select className="input" value={d.receiptPrinterId ?? ''} onChange={(e) => setReceipt(d, e.target.value)}>
-                <option value="">— bez štampe računa —</option>
+                <option value="">- bez štampe računa -</option>
                 {pr.data!.filter((p) => p.active).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>)}</td></tr>))}
         </tbody>
@@ -248,7 +247,7 @@ function Devices() {
           <p className="warn-text"><strong>Ključ se prikazuje samo sada.</strong> Upišite ga u <code>apps/print-bridge/.env</code> kao <code>BRIDGE_KEY=…</code>.</p>
           <textarea className="input" readOnly rows={3} value={key.apiKey} onFocus={(e) => e.currentTarget.select()} style={{ fontFamily: 'monospace' }} />
           <div className="modal-actions">
-            <button className="btn" onClick={() => navigator.clipboard?.writeText(key.apiKey).then(() => toast('ok', 'Kopirano'), () => toast('err', 'Kopiranje nije dozvoljeno — označite i kopirajte ručno'))}>Kopiraj</button>
+            <button className="btn" onClick={() => navigator.clipboard?.writeText(key.apiKey).then(() => toast('ok', 'Kopirano'), () => toast('err', 'Kopiranje nije dozvoljeno - označite i kopirajte ručno'))}>Kopiraj</button>
             <button className="btn primary" onClick={() => setKey(null)}>Zapisao sam ključ</button>
           </div>
         </Modal>

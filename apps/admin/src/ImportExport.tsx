@@ -10,6 +10,7 @@ interface Preview {
   total: number; valid: number; invalid: number; creates: number; updates: number; format: string;
   columns: { key: string; label: string; present: boolean; required: boolean }[]; ignoredColumns: string[];
   rows: { row: number; values: Record<string, string>; action: 'create' | 'update' | null; errors: string[] }[];
+  newCategories?: string[];
 }
 
 /** Uvoz: izbor fajla → pregled (šta će se desiti, greške po redovima) → potvrda. */
@@ -21,6 +22,13 @@ export function ImportPanel({ entity, documentId, onDone }: { entity: Entity; do
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
   const input = useRef<HTMLInputElement>(null);
+  const [createCategories, setCreateCategories] = useState(false);
+  const runPreview = async (f: { name: string; content: string }, cc = createCategories) =>
+    setPreview(await api('POST', `/import/${entity}/preview`, { fileName: f.name, content: f.content, documentId, ...(entity === 'products' ? { createCategories: cc } : {}) }));
+  const toggleCats = async (v: boolean) => {
+    setCreateCategories(v);
+    if (file) { setBusy(true); setError(undefined); try { await runPreview(file, v); } catch (e) { setError(e); } finally { setBusy(false); } }
+  };
 
   const choose = async (f: File | undefined) => {
     setPreview(null); setResult(null); setError(undefined);
@@ -29,14 +37,14 @@ export function ImportPanel({ entity, documentId, onDone }: { entity: Entity; do
     try {
       const content = await fileToBase64(f);
       setFile({ name: f.name, content });
-      setPreview(await api('POST', `/import/${entity}/preview`, { fileName: f.name, content, documentId }));
+      await runPreview({ name: f.name, content });
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
   const commit = async (skipInvalid: boolean) => {
     if (!file) return;
     setBusy(true); setError(undefined);
     try {
-      const r = await api('POST', `/import/${entity}/commit`, { fileName: file.name, content: file.content, documentId, skipInvalid });
+      const r = await api('POST', `/import/${entity}/commit`, { fileName: file.name, content: file.content, documentId, skipInvalid, ...(entity === 'products' ? { createCategories } : {}) });
       setResult(r); setPreview(null); toast('ok', `Uvoz završen: novih ${r.created}, izmenjenih ${r.updated}${r.skipped.length ? `, preskočeno ${r.skipped.length}` : ''}`);
       onDone?.();
     } catch (e) { setError(e); } finally { setBusy(false); }
@@ -51,6 +59,8 @@ export function ImportPanel({ entity, documentId, onDone }: { entity: Entity; do
       <div className="toolbar">
         <input ref={input} type="file" accept=".csv,.xlsx,.txt" onChange={(e) => choose(e.target.files?.[0])} />
         <button className="btn sm" onClick={() => download(`/import/${entity}/template?format=xlsx`).catch((e) => toast('err', e.message))}>Šablon XLSX</button>
+        {entity === 'products' && <label className="check" title="Za prelazak sa drugog programa: grupe iz fajla se prave same">
+          <input type="checkbox" checked={createCategories} onChange={(e) => void toggleCats(e.target.checked)} /> Napravi grupe koje ne postoje</label>}
         <button className="btn sm" onClick={() => download(`/import/${entity}/template?format=csv`).catch((e) => toast('err', e.message))}>Šablon CSV</button>
       </div>
       {busy && <p className="muted">Obrada…</p>}
@@ -60,13 +70,14 @@ export function ImportPanel({ entity, documentId, onDone }: { entity: Entity; do
           <div className={`notice ${preview.invalid ? 'warn' : ''}`}>
             {preview.total} redova: <strong>{preview.valid} ispravnih</strong> ({preview.creates} novih, {preview.updates} izmena), <strong>{preview.invalid} sa greškom</strong>.
             {preview.ignoredColumns.length > 0 && <> Kolone koje se ne koriste: {preview.ignoredColumns.join(', ')}.</>}
+            {!!preview.newCategories?.length && <> Nove grupe: <strong>{preview.newCategories.join(', ')}</strong>.</>}
           </div>
           <div style={{ maxHeight: 420, overflow: 'auto' }}>
             <table className="tbl">
               <thead><tr><th>Red</th><th>Akcija</th>{preview.columns.filter((c) => c.present).map((c) => <th key={c.key}>{c.label}</th>)}<th>Greške</th></tr></thead>
               <tbody>{preview.rows.map((r) => (
                 <tr key={r.row} className={r.errors.length ? 'row-error' : ''}>
-                  <td>{r.row}</td><td>{r.errors.length ? '—' : r.action === 'update' ? 'izmena' : 'novo'}</td>
+                  <td>{r.row}</td><td>{r.errors.length ? '-' : r.action === 'update' ? 'izmena' : 'novo'}</td>
                   {preview.columns.filter((c) => c.present).map((c) => <td key={c.key}>{r.values[c.key]}</td>)}
                   <td className="warn-text small">{r.errors.join('; ')}</td>
                 </tr>))}
@@ -96,7 +107,6 @@ export function ImportExport() {
   const exp = (what: string, format: string) => download(`/export/${what}?format=${format}`).catch((e) => toast('err', e.message));
   return (
     <div className="page">
-      <div className="toolbar"><h2 style={{ margin: 0, flex: 1 }}>Uvoz i izvoz</h2></div>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Izvoz</h3>
         <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-start', gap: 8 }}>
@@ -116,7 +126,7 @@ export function ImportExport() {
           {entity === 'products'
             ? 'Postojeći artikal (ista šifra) se menja, novi se dodaje. Kategorija i PDV oznaka moraju već postojati. Promena cene se beleži u istoriji cena.'
             : 'Partner sa istim PIB-om se menja; bez PIB-a se uvek dodaje novi. PIB se proverava kontrolnom cifrom.'}
-          {' '}Ako fajl ima grešaka, ništa se ne uvozi — osim ako izričito izaberete da se neispravni redovi preskoče.
+          {' '}Ako fajl ima grešaka, ništa se ne uvozi - osim ako izričito izaberete da se neispravni redovi preskoče.
         </p>
         <ImportPanel key={entity} entity={entity} />
       </div>

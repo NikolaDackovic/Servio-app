@@ -23,20 +23,23 @@ import { dec, money } from '../../common/money';
 import { applyMovement, lockBalances, MoveInput, q4 } from './engine';
 
 export const QTY_RE = /^\d{1,11}([.,]\d{1,4})?$/;
+/** Stavka dokumenta: korekcija zalihe dozvoljava i minus (npr. -1 Coca-Cola, +1 Coca-Cola Zero). */
+const LINE_QTY_RE = /^-?\d{1,11}([.,]\d{1,4})?$/;
 export const COST_RE = /^\d{1,11}([.,]\d{1,4})?$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const normNum = (s: string) => s.replace(',', '.');
 
-export const DOC_KINDS = ['RECEIPT', 'ISSUE', 'RETURN', 'TRANSFER', 'WRITE_OFF', 'INTERNAL', 'STOCKTAKE'] as const;
+export const DOC_KINDS = ['RECEIPT', 'RECEIPT_NOTE', 'ISSUE', 'RETURN', 'TRANSFER', 'WRITE_OFF', 'INTERNAL', 'STOCKTAKE', 'CORRECTION'] as const;
 type DocKind = (typeof DOC_KINDS)[number];
 export const DOC_PREFIX: Record<DocKind, string> = {
-  RECEIPT: 'PRI', ISSUE: 'IZL', RETURN: 'POV', TRANSFER: 'MP', WRITE_OFF: 'OTP', INTERNAL: 'IP', STOCKTAKE: 'POP',
+  RECEIPT: 'UF', RECEIPT_NOTE: 'UO', ISSUE: 'IF', RETURN: 'POV', TRANSFER: 'MP', WRITE_OFF: 'OTP', INTERNAL: 'IP', STOCKTAKE: 'PO', CORRECTION: 'KOR',
 };
 export const DOC_LABEL: Record<DocKind, string> = {
-  RECEIPT: 'Prijemnica (ulaz robe)', ISSUE: 'Izlaz robe', RETURN: 'Povrat dobavljaču', TRANSFER: 'Prenos između skladišta',
-  WRITE_OFF: 'Otpis', INTERNAL: 'Interna potrošnja', STOCKTAKE: 'Popis',
+  RECEIPT: 'Ulazna faktura (prijemnica)', RECEIPT_NOTE: 'Ulazna otpremnica', ISSUE: 'Izlazna faktura (izlaz robe)', RETURN: 'Povrat dobavljaču', TRANSFER: 'Prenos između skladišta',
+  WRITE_OFF: 'Otpis', INTERNAL: 'Interna potrošnja', STOCKTAKE: 'Popis', CORRECTION: 'Korekcija zalihe',
 };
-const NEEDS_PARTNER: DocKind[] = ['RECEIPT', 'RETURN'];
+const NEEDS_PARTNER: DocKind[] = ['RECEIPT', 'RECEIPT_NOTE', 'RETURN'];
+const IS_RECEIPT = (k: string) => k === 'RECEIPT' || k === 'RECEIPT_NOTE';
 
 // ---------------------------------------------------------------- DTO
 
@@ -65,6 +68,7 @@ class PartnerQuery {
   @IsOptional() @IsString() @Length(1, 60) search?: string;
   @IsOptional() @ToBool() @IsBoolean() includeInactive?: boolean;
 }
+class BuyerQuery { @IsOptional() @IsString() @Length(0, 60) q?: string; }
 class WarehouseDto {
   @IsString() @Length(1, 60) name: string;
   @IsOptional() @IsBoolean() isDefault?: boolean;
@@ -83,6 +87,8 @@ class CreateDocDto {
   @IsOptional() @Matches(DATE_RE) docDate?: string;
   @IsOptional() @IsString() @Length(0, 60) externalNumber?: string | null;
   @IsOptional() @IsString() @Length(0, 500) note?: string | null;
+  @IsOptional() @Matches(DATE_RE) dueDate?: string | null;
+  @IsOptional() @IsString() @Length(0, 500) internalNote?: string | null;
 }
 class UpdateDocDto {
   @IsOptional() @IsUUID() warehouseId?: string;
@@ -91,12 +97,15 @@ class UpdateDocDto {
   @IsOptional() @Matches(DATE_RE) docDate?: string;
   @IsOptional() @IsString() @Length(0, 60) externalNumber?: string | null;
   @IsOptional() @IsString() @Length(0, 500) note?: string | null;
+  @IsOptional() @Matches(DATE_RE) dueDate?: string | null;
+  @IsOptional() @IsString() @Length(0, 500) internalNote?: string | null;
   @IsOptional() @IsInt() expectedVersion?: number;
 }
 export class DocLineDto {
   @IsUUID() productId: string;
-  @Matches(QTY_RE, { message: 'Količina: broj sa najviše 4 decimale' }) quantity: string;
+  @Matches(LINE_QTY_RE, { message: 'Količina: broj sa najviše 4 decimale' }) quantity: string;
   @IsOptional() @Matches(COST_RE, { message: 'Cena: broj sa najviše 4 decimale' }) unitCost?: string | null;
+  @IsOptional() @Matches(/^\d{1,2}([.,]\d{1,2})?$/, { message: 'Rabat: 0-99,99%' }) discountPercent?: string | null;
   @IsOptional() @IsString() @Length(0, 200) note?: string | null;
 }
 class SetLinesDto {
@@ -113,7 +122,7 @@ class DocQuery {
   @IsOptional() @Matches(DATE_RE) from?: string;
   @IsOptional() @Matches(DATE_RE) to?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) pageSize?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(2000) pageSize?: number;
 }
 class BalanceQuery {
   @IsOptional() @IsUUID() warehouseId?: string;
@@ -136,6 +145,25 @@ export class StockService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   // ----- partneri
+
+  async searchBuyers(u: AuthUser, q: string) {
+    const term = `%${q.trim().toLowerCase()}%`;
+    const partnersRows = (await this.db.execute(sql`
+      SELECT p.id, p.name, p.tax_id AS "taxId", p.city FROM partners p
+      WHERE p.organization_id = ${u.organizationId} AND p.active AND p.tax_id IS NOT NULL AND p.kind IN ('CUSTOMER', 'BOTH', 'SUPPLIER')
+        AND (lower(p.name) LIKE ${term} OR p.tax_id LIKE ${term})
+      ORDER BY p.name LIMIT 30`)).rows as { id: string; name: string; taxId: string; city: string | null }[];
+    // kupci sa ranijih računa (PIB/JMBG koji nisu u komitentima), najčešći prvo
+    const previous = (await this.db.execute(sql`
+      SELECT o.buyer_id_type AS "idType", o.buyer_id AS "idValue", count(*)::int AS times, max(o.closed_at) AS "lastAt"
+      FROM orders o WHERE o.location_id = ${u.locationId} AND o.buyer_id IS NOT NULL AND o.buyer_id LIKE ${term}
+      GROUP BY 1, 2 ORDER BY count(*) DESC, max(o.closed_at) DESC NULLS LAST LIMIT 20`)).rows as { idType: string; idValue: string; times: number }[];
+    const known = new Set(partnersRows.map((p) => p.taxId));
+    return [
+      ...partnersRows.map((p) => ({ idType: '10', idValue: p.taxId, name: p.name, note: p.city ?? null })),
+      ...previous.filter((x) => !(x.idType === '10' && known.has(x.idValue))).map((x) => ({ idType: x.idType, idValue: x.idValue, name: null, note: `raniji kupac · ${x.times}×` })),
+    ];
+  }
 
   listPartners(u: AuthUser, q: PartnerQuery) {
     const conds: SQL[] = [eq(partners.organizationId, u.organizationId)];
@@ -190,7 +218,7 @@ export class StockService {
     return this.db.transaction(async (tx) => {
       const [cur] = await tx.select().from(warehouses).where(and(eq(warehouses.id, id), eq(warehouses.locationId, u.locationId))).for('update');
       if (!cur) throw NotFound('Skladište');
-      if (dto.isDefault === false && cur.isDefault) throw Invalid('DEFAULT_REQUIRED', 'Lokal mora imati podrazumevano skladište — postavite drugo kao podrazumevano');
+      if (dto.isDefault === false && cur.isDefault) throw Invalid('DEFAULT_REQUIRED', 'Lokal mora imati podrazumevano skladište - postavite drugo kao podrazumevano');
       if (dto.active === false && (cur.isDefault || dto.isDefault)) throw Invalid('DEFAULT_REQUIRED', 'Podrazumevano skladište ne može da se isključi');
       if (dto.isDefault) await tx.update(warehouses).set({ isDefault: false }).where(and(eq(warehouses.locationId, u.locationId), ne(warehouses.id, id)));
       const [w] = await tx.update(warehouses).set({ ...dto, ...(dto.name ? { name: dto.name.trim() } : {}) }).where(eq(warehouses.id, id)).returning();
@@ -254,7 +282,7 @@ export class StockService {
         locationId: u.locationId, kind: dto.kind, warehouseId: dto.warehouseId,
         targetWarehouseId: dto.kind === 'TRANSFER' ? dto.targetWarehouseId ?? null : null,
         partnerId: dto.partnerId ?? null, docDate: dto.docDate ?? todayIn(loc.tz), externalNumber: dto.externalNumber ?? null,
-        note: dto.note ?? null, createdById: u.userId,
+        note: dto.note ?? null, dueDate: dto.dueDate ?? null, internalNote: dto.internalNote ?? null, createdById: u.userId,
       }).returning();
       await audit(tx, u, 'stock.doc.create', 'stock_document', d.id, { kind: d.kind });
       return this.getDoc(u, d.id, tx);
@@ -285,6 +313,7 @@ export class StockService {
         await tx.insert(stockDocumentLines).values(dto.lines.map((l, i) => ({
           documentId: id, productId: l.productId, quantity: q4(dec(normNum(l.quantity))),
           unitCost: l.unitCost ? q4(dec(normNum(l.unitCost))) : null, note: l.note ?? null, sortOrder: i,
+          discountPercent: l.discountPercent ? normNum(l.discountPercent) : null,
         })));
       }
       await tx.update(stockDocuments).set({ version: d.version + 1, updatedAt: new Date() }).where(eq(stockDocuments.id, id));
@@ -295,7 +324,7 @@ export class StockService {
   async validateLines(tx: Tx | Db, u: AuthUser, kind: DocKind, lines: DocLineDto[]) {
     const ids = lines.map((l) => l.productId);
     const dup = ids.find((x, i) => ids.indexOf(x) !== i);
-    if (dup) throw Invalid('DUPLICATE_LINE', 'Isti artikal je naveden više puta — saberite količine u jednu stavku', { productId: dup });
+    if (dup) throw Invalid('DUPLICATE_LINE', 'Isti artikal je naveden više puta - saberite količine u jednu stavku', { productId: dup });
     const prods = ids.length ? await tx.select({ id: products.id, name: products.name, trackStock: products.trackStock })
       .from(products).where(and(inArray(products.id, ids), eq(products.organizationId, u.organizationId))) : [];
     const errors: { index: number; message: string }[] = [];
@@ -304,8 +333,9 @@ export class StockService {
       if (!p) return errors.push({ index: i, message: 'Artikal ne postoji' });
       if (!p.trackStock) errors.push({ index: i, message: `„${p.name}“ nema uključeno vođenje zalihe` });
       const q = dec(normNum(l.quantity));
-      if (kind !== 'STOCKTAKE' && q.lte(0)) errors.push({ index: i, message: `„${p.name}“: količina mora biti veća od 0` });
-      if (kind === 'RECEIPT' && (l.unitCost === undefined || l.unitCost === null || l.unitCost === '')) errors.push({ index: i, message: `„${p.name}“: nabavna cena je obavezna na prijemnici` });
+      if (kind === 'CORRECTION') { if (q.isZero()) errors.push({ index: i, message: `„${p.name}“: količina ne može biti 0 (+ ulaz, - izlaz)` }); }
+      else if (q.lt(0) || (kind !== 'STOCKTAKE' && q.isZero())) errors.push({ index: i, message: `„${p.name}“: količina mora biti veća od 0` });
+      if (IS_RECEIPT(kind) && (l.unitCost === undefined || l.unitCost === null || l.unitCost === '')) errors.push({ index: i, message: `„${p.name}“: nabavna cena je obavezna na prijemnici` });
     });
     if (errors.length) throw Invalid('INVALID_LINES', errors.map((e) => `Red ${e.index + 1}: ${e.message}`).join('; '), { errors });
   }
@@ -354,6 +384,22 @@ export class StockService {
         throw Conflict('STALE_DOCUMENT', 'Dokument je u međuvremenu izmenjen. Proverite stavke pre knjiženja.');
       }
       const kind = d.kind as DocKind;
+      // Popis za tekući dan se knjiži kada je smena zatvorena (kasa tada ne troši robu). Popis za raniji, već zatvoren
+      // dan (npr. zaboravljen prekjučerašnji) može odmah: očekivano = stanje na kraju tog dana, razlika ide na današnje stanje.
+      let asOf: Date | null = null;
+      if (kind === 'STOCKTAKE') {
+        const open = (await tx.execute(sql`SELECT date::text AS date FROM business_days WHERE location_id = ${d.locationId} AND status = 'OPEN' LIMIT 1`)).rows as { date: string }[];
+        if (open.length && d.docDate >= open[0].date) {
+          throw Conflict('STOCKTAKE_SHIFT_OPEN', `Popis za ${open[0].date.split('-').reverse().join('.')}. se knjiži tek kada se ta smena zatvori. Popis za raniji (zatvoren) dan može odmah - promenite datum prometa.`);
+        }
+        if (open.length) {
+          const cut = (await tx.execute(sql`
+            SELECT coalesce(
+              (SELECT max(closed_at) FROM business_days WHERE location_id = ${d.locationId} AND date = ${d.docDate}::date AND status = 'CLOSED'),
+              ((${d.docDate}::date + 1)::timestamp AT TIME ZONE (SELECT timezone FROM locations WHERE id = ${d.locationId}))) AS at`)).rows[0] as { at: Date | string };
+          asOf = new Date(cut.at);
+        }
+      }
       if (NEEDS_PARTNER.includes(kind) && !d.partnerId) throw Invalid('PARTNER_REQUIRED', `${DOC_LABEL[kind]} zahteva partnera (dobavljača)`);
       await this.validateHeader(tx, u, kind, d);
       const lines = await tx.select({ l: stockDocumentLines, name: products.name }).from(stockDocumentLines)
@@ -370,15 +416,22 @@ export class StockService {
       for (const { l, name } of lines) {
         const q = dec(l.quantity);
         const common = { ...base, productId: l.productId, documentLineId: l.id, productName: name };
-        if (kind === 'RECEIPT') {
+        if (IS_RECEIPT(kind)) {
           await applyMovement(tx, { ...common, warehouseId: d.warehouseId, quantity: q, unitCost: dec(l.unitCost), allowNegative: false });
         } else if (kind === 'TRANSFER') {
           const out = await applyMovement(tx, { ...common, warehouseId: d.warehouseId, quantity: q.neg(), allowNegative: false });
           await applyMovement(tx, { ...common, warehouseId: d.targetWarehouseId!, quantity: q, unitCost: dec(out.unitCost), allowNegative: false });
         } else if (kind === 'STOCKTAKE') {
-          const [b] = await tx.select().from(stockBalances)
-            .where(and(eq(stockBalances.warehouseId, d.warehouseId), eq(stockBalances.productId, l.productId)));
-          const book = dec(b?.quantity ?? 0);
+          let book;
+          if (asOf) {
+            const [m] = (await tx.execute(sql`SELECT balance_after::text AS q FROM stock_movements
+              WHERE warehouse_id = ${d.warehouseId} AND product_id = ${l.productId} AND created_at < ${asOf.toISOString()}::timestamptz ORDER BY seq DESC LIMIT 1`)).rows as { q: string }[];
+            book = dec(m?.q ?? 0);
+          } else {
+            const [b] = await tx.select().from(stockBalances)
+              .where(and(eq(stockBalances.warehouseId, d.warehouseId), eq(stockBalances.productId, l.productId)));
+            book = dec(b?.quantity ?? 0);
+          }
           await tx.update(stockDocumentLines).set({ bookQuantity: q4(book) }).where(eq(stockDocumentLines.id, l.id));
           const diff = q.sub(book);
           if (!diff.isZero()) {
@@ -387,8 +440,11 @@ export class StockService {
               unitCost: diff.gt(0) && l.unitCost ? dec(l.unitCost) : undefined,
             });
           }
+        } else if (kind === 'CORRECTION') {
+          // korekcija: + ulaz po unetoj ili prosečnoj nabavnoj ceni, - izlaz po prosečnoj (ne u minus)
+          await applyMovement(tx, { ...common, warehouseId: d.warehouseId, quantity: q, allowNegative: false, unitCost: q.gt(0) && l.unitCost ? dec(l.unitCost) : undefined });
         } else {
-          // ISSUE, RETURN, WRITE_OFF, INTERNAL — izlaz po prosečnoj nabavnoj ceni
+          // ISSUE, RETURN, WRITE_OFF, INTERNAL - izlaz po prosečnoj nabavnoj ceni
           await applyMovement(tx, { ...common, warehouseId: d.warehouseId, quantity: q.neg(), allowNegative: false });
         }
       }
@@ -403,7 +459,7 @@ export class StockService {
 
   /**
    * Storno: nacrt se samo označava kao storniran; proknjižen dokument dobija suprotna kretanja
-   * (po istoj ceni) — kartica ostaje potpuna. Storno koji bi stanje odveo u minus se odbija.
+   * (po istoj ceni) - kartica ostaje potpuna. Storno koji bi stanje odveo u minus se odbija.
    */
   async cancelDoc(u: AuthUser, id: string, dto: CancelDocDto) {
     return this.db.transaction(async (tx) => {
@@ -564,7 +620,7 @@ export class StockService {
       const doc = r.docKind ? `${DOC_PREFIX[r.docKind as DocKind]}-${r.docNumber ?? '?'}` : null;
       return {
         id: r.m.id, at: r.m.createdAt, source: r.m.source,
-        description: r.m.source === 'SALE' ? `Prodaja — račun #${r.orderNumber}${r.m.recipeId ? ' (normativ)' : ''}`
+        description: r.m.source === 'SALE' ? `Prodaja - račun #${r.orderNumber}${r.m.recipeId ? ' (normativ)' : ''}`
           : r.m.source === 'REVERSAL' ? `Storno ${doc ?? ''}`.trim()
             : `${DOC_LABEL[r.docKind as DocKind] ?? 'Dokument'} ${doc ?? ''}${r.partnerName ? ` · ${r.partnerName}` : ''}`,
         documentId: r.docId, orderId: r.m.orderId,
@@ -589,6 +645,9 @@ export class StockService {
 export class StockController {
   constructor(private readonly svc: StockService) {}
 
+  /** Kasa (naplata → Kupac): komitenti po nazivu ili PIB-u, plus kupci sa ranijih računa ovog lokala. */
+  @Get('buyers/search') @RequirePermissions(P.ORDER_READ)
+  buyers(@CurrentUser() u: AuthUser, @Query() q: BuyerQuery) { return this.svc.searchBuyers(u, q.q ?? ''); }
   @Get('partners') @RequirePermissions(P.STOCK_READ)
   partners(@CurrentUser() u: AuthUser, @Query() q: PartnerQuery) { return this.svc.listPartners(u, q); }
   @Post('partners') @RequirePermissions(P.STOCK_WRITE)

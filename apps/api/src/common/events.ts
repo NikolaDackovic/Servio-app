@@ -4,7 +4,7 @@ import { Global, Injectable, Module } from '@nestjs/common';
  * Događaj u realnom vremenu. Objavljuje se TEK POSLE uspešnog commit-a transakcije
  * (servisi skupljaju događaje u transakciji i vraćaju ih; objava ide posle).
  * Klijenti (KDS, kasa) posle ponovnog povezivanja uvek ponovo učitaju stanje preko REST-a,
- * pa propušten događaj ne može da ostavi pogrešno stanje — WebSocket je samo "obaveštenje".
+ * pa propušten događaj ne može da ostavi pogrešno stanje - WebSocket je samo "obaveštenje".
  */
 export interface RealtimeEvent {
   type: string;

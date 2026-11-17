@@ -1,14 +1,15 @@
 /**
- * DEMO podaci — samo za razvoj i demonstraciju. Ne pokretati na produkcionoj bazi klijenta.
+ * DEMO podaci - samo za razvoj i demonstraciju. Ne pokretati na produkcionoj bazi klijenta.
  * Idempotentno: ako demo organizacija već postoji, ništa se ne menja.
  *
  * Demo nalozi (promeniti odmah u svakom ne-razvojnom okruženju):
  *   admin@demo.local / Demo123!      (Administrator)
- *   PIN 1111 — Marko (Konobar)
- *   PIN 2222 — Ana (Kasir)
- *   PIN 9999 — Jelena (Menadžer)
+ *   PIN 1111 - Marko (Konobar)
+ *   PIN 2222 - Ana (Kasir)
+ *   PIN 9999 - Jelena (Menadžer)
  */
 import '../load-env';
+import { createDefaultUsers } from './default-users';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
@@ -16,6 +17,15 @@ import * as s from './schema';
 import { DEFAULT_ROLES } from '../common/permissions';
 import { hashSecret, pinLookup } from '../common/security';
 import { createHash, randomBytes } from 'crypto';
+
+/** Demo izmene artikala (u ADMIN-u: Artikli → Izmene na kasi); kasa ih nudi čim se artikal otkuca. */
+const DEMO_OPTIONS: Record<string, string[]> = {
+  S001: ['Bez leda', 'Sa ledom', 'Sa limunom', 'Bez čaše', 'Topla'],
+  S003: ['Bez leda', 'Sa ledom', 'Sa limunom', 'Bez čaše', 'Topla'],
+  K001: ['Bez šećera', 'Sa mlekom', 'Duplo', 'Za poneti'],
+  K002: ['Bez šećera', 'Sa mlekom', 'Duplo', 'Za poneti'],
+  H002: ['Bez luka', 'Bez kajmaka', 'Ljuto', 'Dobro pečeno', 'Bez priloga'],
+};
 
 export const DEMO_ORG_NAME = 'DEMO Kafe Restoran';
 
@@ -28,8 +38,8 @@ export async function seed(databaseUrl: string, pinPepper: string) {
 
     return await db.transaction(async (tx) => {
       const [org] = await tx.insert(s.organizations).values({ name: DEMO_ORG_NAME, taxId: '000000000' }).returning();
-      const [loc] = await tx.insert(s.locations).values({ organizationId: org.id, name: 'Demo lokal – Centar', address: 'Demo adresa 1, Beograd' }).returning();
-      const [pos1] = await tx.insert(s.devices).values({ locationId: loc.id, name: 'Kasa 1 – Šank', kind: 'POS' }).returning();
+      const [loc] = await tx.insert(s.locations).values({ organizationId: org.id, name: 'Demo lokal - Centar', address: 'Demo adresa 1, Beograd' }).returning();
+      const [pos1] = await tx.insert(s.devices).values({ locationId: loc.id, name: 'Kasa 1 - Šank', kind: 'POS' }).returning();
       await tx.insert(s.devices).values({ locationId: loc.id, name: 'Telefon konobara 1', kind: 'MOBILE' });
 
       const roleIds: Record<string, string> = {};
@@ -41,6 +51,8 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       const mkUser = async (fullName: string, role: string, opts: { email?: string; password?: string; pin?: string }) => {
         await tx.insert(s.users).values({
           organizationId: org.id, roleId: roleIds[role], fullName,
+          firstName: fullName.split(' ')[0], lastName: fullName.split(' ').slice(1).join(' '),
+          username: (opts.email === 'admin@demo.local' ? 'administrator' : opts.email ? opts.email.split('@')[0] : fullName.split(' ')[0]).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'dj'),
           email: opts.email ?? null,
           passwordHash: opts.password ? await hashSecret(opts.password) : null,
           pinHash: opts.pin ? await hashSecret(opts.pin) : null,
@@ -53,6 +65,8 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       await mkUser('Ana Kasir', 'CASHIER', { pin: '2222' });
       await mkUser('Jelena Menadžer', 'MANAGER', { pin: '9999', email: 'menadzer@demo.local', password: 'Demo123!' });
       await mkUser('Kuhinja', 'KITCHEN', { pin: '3333' });
+      // isti podrazumevani nalozi kao u svakoj novoj bazi (ADMIN/0000, KON01/11, KON02/22, tv/tv)
+      await createDefaultUsers(tx, org.id, roleIds, pinPepper);
 
       // Oznake i stope proveriti prema važećem tehničkom vodiču PU pre produkcije.
       const [vat20] = await tx.insert(s.taxRates).values({ organizationId: org.id, label: 'Đ', name: 'Opšta stopa PDV', rate: '20.00' }).returning();
@@ -66,20 +80,20 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       const pivo = await cat('Pivo i vino', '#C9A227', 3);
       const hrana = await cat('Hrana', '#3C9D5D', 4);
 
-      // Štampa i KDS (demo): SIMULIRANI štampači — Print Bridge ih ne šalje na papir, već ih beleži kao SIMULATED.
-      const [prBar] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Šank – simulacija', connection: 'SIMULATED' }).returning();
-      const [prKitchen] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Kuhinja – simulacija', connection: 'SIMULATED' }).returning();
-      const [prReceipt] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Kasa 1 – računi (simulacija)', connection: 'SIMULATED' }).returning();
+      // Štampa i KDS (demo): SIMULIRANI štampači - Print Bridge ih ne šalje na papir, već ih beleži kao SIMULATED.
+      const [prBar] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Šank - simulacija', connection: 'SIMULATED' }).returning();
+      const [prKitchen] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Kuhinja - simulacija', connection: 'SIMULATED' }).returning();
+      const [prReceipt] = await tx.insert(s.printers).values({ locationId: loc.id, name: 'Kasa 1 - računi (simulacija)', connection: 'SIMULATED' }).returning();
       const [stBar] = await tx.insert(s.prepStations).values({ locationId: loc.id, name: 'Šank', kind: 'BAR', printerId: prBar.id }).returning();
       const [stKitchen] = await tx.insert(s.prepStations).values({ locationId: loc.id, name: 'Kuhinja', kind: 'KITCHEN', printerId: prKitchen.id }).returning();
       for (const c of [kafa, sok, pivo]) await tx.update(s.categories).set({ prepStationId: stBar.id }).where(eq(s.categories.id, c.id));
       await tx.update(s.categories).set({ prepStationId: stKitchen.id }).where(eq(s.categories.id, hrana.id));
       await tx.update(s.devices).set({ receiptPrinterId: prReceipt.id }).where(eq(s.devices.id, pos1.id));
-      const [kds] = await tx.insert(s.devices).values({ locationId: loc.id, name: 'KDS – Kuhinja', kind: 'KDS' }).returning();
+      const [kds] = await tx.insert(s.devices).values({ locationId: loc.id, name: 'KDS - Kuhinja', kind: 'KDS' }).returning();
       // Demo Print Bridge: ključ se ispisuje samo ovde (razvoj). U produkciji ključ izdaje ADMIN → Štampa.
       const bridgeKey = `pb_${randomBytes(32).toString('base64url')}`;
       const [bridge] = await tx.insert(s.devices).values({
-        locationId: loc.id, name: 'Print Bridge – demo', kind: 'BRIDGE',
+        locationId: loc.id, name: 'Print Bridge - demo', kind: 'BRIDGE',
         apiKeyHash: createHash('sha256').update(bridgeKey).digest('hex'), apiKeyPrefix: bridgeKey.slice(0, 10),
       }).returning();
 
@@ -96,19 +110,20 @@ export async function seed(databaseUrl: string, pinPepper: string) {
         [hrana, 'H001', 'Pileći file sa grilla', '1150.00', vat20.id],
         [hrana, 'H002', 'Pljeskavica', '990.00', vat20.id],
         [hrana, 'H003', 'Šopska salata', '450.00', vat20.id],
-        [hrana, 'H004', 'Proja (posebna stopa – demo)', '200.00', vat10.id],
+        [hrana, 'H004', 'Proja (posebna stopa - demo)', '200.00', vat10.id],
       ];
       let i = 0;
       const byCode: Record<string, string> = {};
       for (const [c, code, name, price, tax] of prods) {
         // Flaširana pića se vode na zalihi direktno (prodaja troši sam artikal); ostalo preko normativa.
         const trackStock = ['S001', 'S003'].includes(code);
-        const [p] = await tx.insert(s.products).values({ organizationId: org.id, categoryId: c.id, taxRateId: tax, code, name, price, sortOrder: i++, trackStock }).returning();
+        const noteOptions = DEMO_OPTIONS[code] ?? [];
+        const [p] = await tx.insert(s.products).values({ organizationId: org.id, categoryId: c.id, taxRateId: tax, code, name, price, sortOrder: i++, trackStock, noteOptions }).returning();
         await tx.insert(s.productPriceChanges).values({ productId: p.id, oldPrice: null, newPrice: price, userId: adminUser.id });
         byCode[code] = p.id;
       }
 
-      // Lager (demo): skladišta, sirovine (ne prodaju se na kasi), normativi, dobavljač. Bez demo dokumenata —
+      // Lager (demo): skladišta, sirovine (ne prodaju se na kasi), normativi, dobavljač. Bez demo dokumenata -
       // stanje je 0 dok se ne proknjiži prijemnica.
       const [whMain] = await tx.insert(s.warehouses).values({ locationId: loc.id, name: 'Glavni magacin', isDefault: true }).returning();
       const [whBar] = await tx.insert(s.warehouses).values({ locationId: loc.id, name: 'Šank' }).returning();
@@ -132,8 +147,15 @@ export async function seed(databaseUrl: string, pinPepper: string) {
       for (const [name, percent] of [['Popust 10%', '10'], ['Popust 20%', '20'], ['Popust 30%', '30'], ['Popust 40%', '40'], ['Loyalty 15%', '15']] as const) {
         await tx.insert(s.discounts).values({ organizationId: org.id, name, percent, sortOrder: order++ });
       }
+      // Raspored demo mape (menja se u ADMIN-u → Mapa stolova): x, y, širina, visina, oblik, mesta
+      const layout: [number, number, number, number, 'RECT' | 'ROUND', number][] = [
+        [60, 60, 120, 90, 'RECT', 4], [240, 60, 120, 90, 'RECT', 4], [420, 60, 120, 90, 'RECT', 4],
+        [60, 250, 120, 90, 'RECT', 4], [250, 240, 110, 110, 'ROUND', 4], [660, 60, 130, 290, 'RECT', 10],
+        [80, 80, 120, 120, 'ROUND', 4], [280, 80, 120, 120, 'ROUND', 4],
+      ];
       for (let t = 1; t <= 8; t++) {
-        await tx.insert(s.diningTables).values({ locationId: loc.id, name: `Sto ${t}`, area: t <= 6 ? 'Sala' : 'Bašta', seats: 4, posX: ((t - 1) % 4) * 140, posY: Math.floor((t - 1) / 4) * 120 });
+        const [posX, posY, width, height, shape, seats] = layout[t - 1];
+        await tx.insert(s.diningTables).values({ locationId: loc.id, name: `Sto ${t}`, area: t <= 6 ? 'Sala' : 'Bašta', seats, posX, posY, width, height, shape });
       }
       return {
         created: true, organizationId: org.id, locationId: loc.id, posDeviceId: pos1.id, kdsDeviceId: kds.id,
@@ -155,9 +177,9 @@ if (require.main === module) {
   }
   seed(url, pepper)
     .then((r: any) => {
-      if (!r.created) return console.log('Demo podaci već postoje — preskačem.');
+      if (!r.created) return console.log('Demo podaci već postoje - preskačem.');
       console.log(`Demo podaci kreirani (organizacija ${r.organizationId}).`);
-      console.log(`Print Bridge (demo) — ključ za apps/print-bridge/.env (prikazuje se samo sada):\n  BRIDGE_KEY=${r.bridgeKey}`);
+      console.log(`Print Bridge (demo) - ključ za apps/print-bridge/.env (prikazuje se samo sada):\n  BRIDGE_KEY=${r.bridgeKey}`);
     })
     .catch((e) => { console.error('Seed nije uspeo:', e.message, e.cause?.message ? `\nUzrok: ${e.cause.message}` : ''); process.exit(1); });
 }

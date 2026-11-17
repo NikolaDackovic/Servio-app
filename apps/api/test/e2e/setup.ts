@@ -26,6 +26,11 @@ export async function setupApp(): Promise<Ctx> {
   await admin.end();
   await runMigrations(TEST_DB_URL);
   const s = await seed(TEST_DB_URL, PEPPER);
+  // Testovi proveravaju da server odbija radnju bez prava: konobar u testovima je 'strog' (bez smena i izveštaja),
+  // dok podrazumevani konobar u programu sme i da otvori/zatvori smenu i vidi specifikaciju pazara.
+  const fix = new Pool({ connectionString: TEST_DB_URL, max: 1 });
+  await fix.query("UPDATE roles SET permissions = array_remove(array_remove(array_remove(permissions, 'shift.manage'), 'day.manage'), 'report.read') WHERE code = 'WAITER'");
+  await fix.end();
 
   const cfg: AppConfig = {
     databaseUrl: TEST_DB_URL, jwtSecret: 'test-secret-test-secret-test-secret-123', pinPepper: PEPPER,
@@ -48,7 +53,7 @@ export async function setupApp(): Promise<Ctx> {
 }
 
 export async function teardown(ctx: Ctx | undefined) {
-  if (!ctx) return; // setup nije uspeo — nema šta da se zatvori
+  if (!ctx) return; // setup nije uspeo - nema šta da se zatvori
   await ctx.app.close();
   await ctx.pool.end();
 }

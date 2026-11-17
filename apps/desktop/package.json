@@ -1,0 +1,72 @@
+{
+  "name": "@pos/desktop",
+  "productName": "Servio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Servio - kasa za ugostiteljstvo i hotele (lokalna baza i server; ADMIN i KDS preko mreže lokala)",
+  "author": "Servio",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.json",
+    "build:resources": "node scripts/build-resources.mjs",
+    "build": "npm run build:resources && npm run build:main",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "esbuild": "^0.25.12",
+    "@embedded-postgres/windows-x64": "18.6.0-beta.19"
+  },
+  "build": {
+    "appId": "rs.pos.kasa",
+    "productName": "Servio",
+    "asar": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "app-resources",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Servio-Setup-${version}.exe",
+      "signAndEditExecutable": true,
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Servio",
+      "runAfterFinish": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "include": "build/installer.nsh"
+    },
+    "electronDist": "../../node_modules/electron/dist",
+    "electronVersion": "45.2.1"
+  }
+}

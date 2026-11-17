@@ -16,7 +16,7 @@ export type PrintOutcome =
 
 /**
  * Mrežni termalni štampač (ESC/POS preko "RAW" TCP porta, obično 9100).
- * PRINTED znači da je štampač primio sve bajtove i uredno zatvorio vezu — ESC/POS nema standardnu
+ * PRINTED znači da je štampač primio sve bajtove i uredno zatvorio vezu - ESC/POS nema standardnu
  * potvrdu "odštampano" (npr. nestanak papira se ovako ne vidi). To je ograničenje protokola, ne bridge-a.
  */
 export function sendTcp(host: string, port: number, data: Buffer, timeoutMs = 7000): Promise<PrintOutcome> {
@@ -33,7 +33,7 @@ export function sendTcp(host: string, port: number, data: Buffer, timeoutMs = 70
     });
     sock.on('close', (hadError) => { if (!hadError) finish({ status: 'PRINTED' }); });
     sock.on('timeout', () => finish({ status: 'FAILED', error: `Štampač ${host}:${port} ne odgovara (timeout ${timeoutMs} ms)`, retryable: true }));
-    sock.on('error', (e: NodeJS.ErrnoException) => finish({ status: 'FAILED', error: `${e.code ?? 'ERR'} ${host}:${port} — ${e.message}`, retryable: true }));
+    sock.on('error', (e: NodeJS.ErrnoException) => finish({ status: 'FAILED', error: `${e.code ?? 'ERR'} ${host}:${port} - ${e.message}`, retryable: true }));
   });
 }
 
@@ -43,7 +43,7 @@ export async function writeSimulated(dir: string, printer: PrinterCfg, jobId: st
     await fs.mkdir(dir, { recursive: true });
     const safe = printer.name.replace(/[^\p{L}\p{N}_-]+/gu, '_');
     const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}_${safe}_${jobId.slice(0, 8)}.txt`);
-    await fs.writeFile(file, `=== SIMULACIJA ŠTAMPE — ${printer.name} ===\n${text}`, 'utf8');
+    await fs.writeFile(file, `=== SIMULACIJA ŠTAMPE - ${printer.name} ===\n${text}`, 'utf8');
     return { status: 'SIMULATED' };
   } catch (e: any) {
     return { status: 'FAILED', error: `Simulacija: ${e.message}`, retryable: true };

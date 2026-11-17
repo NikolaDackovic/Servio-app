@@ -20,7 +20,7 @@ export function Report() {
       </div>
       {r.loading && !d ? <Spinner /> : r.error ? <ErrorBox error={r.error} onRetry={r.reload} /> : d && (
         <>
-          {d.payments.containsTestPayments && <div className="test-banner">Period sadrži TEST naplate — nisu stvarne finansijske transakcije.</div>}
+          {d.payments.containsTestPayments && <div className="test-banner">Period sadrži TEST naplate - nisu stvarne finansijske transakcije.</div>}
           <div className="stats">
             <div className="stat"><span>Promet (zatvoreni računi)</span><b>{fmt(d.sales.gross)}</b></div>
             <div className="stat"><span>Broj računa</span><b>{d.sales.orders}</b></div>

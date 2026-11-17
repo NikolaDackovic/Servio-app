@@ -20,7 +20,7 @@ export async function requireOpenDay(tx: DbOrTx, u: AuthUser, lock = false) {
 }
 
 /**
- * Vraća otvorenu smenu zaposlenog u lokalu, a ako je nema — otvara je u tekućem danu.
+ * Vraća otvorenu smenu zaposlenog u lokalu, a ako je nema - otvara je u tekućem danu.
  * Smena počinje prvom radnjom zaposlenog (otvaranje računa, naplata), ne prijavom,
  * da bi kratka prijava radi pregleda ne pravila prazne smene.
  */

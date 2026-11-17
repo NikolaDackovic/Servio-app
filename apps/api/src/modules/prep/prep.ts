@@ -1,18 +1,18 @@
 import {
-  Body, CanActivate, Controller, createParamDecorator, ExecutionContext, Get, HttpCode, Inject, Injectable, Module, Param, ParseUUIDPipe, Patch, Post,
+  Body, CanActivate, Controller, createParamDecorator, ExecutionContext, Get, HttpCode, Inject, Injectable, Module, Param, ParseUUIDPipe, Patch, Post, Put,
   Query, UnauthorizedException, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Matches, Max, Min,
+  ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Matches, Max, Min,
 } from 'class-validator';
 import { createHash, randomBytes } from 'crypto';
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, ne, sql } from 'drizzle-orm';
 import { DB, Db } from '../../db/db.module';
 import {
   devices, diningTables, kdsTickets, orderItems, orders, prepStations, printers, printJobs, users, fiscalReceipts, payments,
-  locations,
+  locations, staffShifts, businessDays, products,
 } from '../../db/schema';
 import { AuthUser, CurrentUser, Public, RequirePermissions } from '../../common/auth-context';
 import { P } from '../../common/permissions';
@@ -20,6 +20,11 @@ import { audit } from '../../common/audit';
 import { Conflict, Invalid, NotFound } from '../../common/errors';
 import { EventBus } from '../../common/events';
 import { summary as fiscalSummary } from '../fiscal/fiscal';
+import { soldByStation, staffShiftSummary } from '../day/day';
+import { computeSales } from '../reports/reports';
+import { locationSettings } from '../settings/settings';
+import { deviceSettings } from '../devices/devices';
+import { dec, money } from '../../common/money';
 
 // ---------------------------------------------------------------- DTO
 
@@ -30,6 +35,8 @@ class PrinterDto {
   @IsOptional() @IsInt() @Min(1) @Max(65535) port?: number | null;
   @IsOptional() @IsString() @Length(1, 200) windowsName?: string | null;
   @IsOptional() @IsIn([58, 80]) paperWidth?: 58 | 80;
+  /** Računar čiji Print Bridge štampa na ovaj štampač (USB/Windows štampač); null = mrežni, bilo koji. */
+  @IsOptional() @IsUUID() bridgeDeviceId?: string | null;
 }
 class UpdatePrinterDto {
   @IsOptional() @IsString() @Length(1, 60) name?: string;
@@ -38,8 +45,11 @@ class UpdatePrinterDto {
   @IsOptional() @IsInt() @Min(1) @Max(65535) port?: number | null;
   @IsOptional() @IsString() @Length(1, 200) windowsName?: string | null;
   @IsOptional() @IsIn([58, 80]) paperWidth?: 58 | 80;
+  @IsOptional() @IsUUID() bridgeDeviceId?: string | null;
   @IsOptional() @IsBoolean() active?: boolean;
 }
+/** Redosled kategorija (Šank, Kuhinja…) na kasi. */
+class StationOrderDto { @IsArray() @ArrayMaxSize(100) @IsUUID('all', { each: true }) ids: string[]; }
 class StationDto {
   @IsString() @Length(1, 60) name: string;
   @IsOptional() @IsIn(['BAR', 'KITCHEN', 'OTHER']) kind?: 'BAR' | 'KITCHEN' | 'OTHER';
@@ -60,7 +70,8 @@ class JobsQuery {
   @IsOptional() @IsUUID() orderId?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) limit?: number;
 }
-class PrintReceiptDto { @IsString() @Length(8, 80) idempotencyKey: string; }
+class PrintReceiptDto { @IsString() @Length(8, 80) idempotencyKey: string; @IsOptional() @IsUUID() printerId?: string; }
+class PrintDayDto { @IsUUID() printerId: string; @IsString() @Length(8, 80) idempotencyKey: string; }
 class KdsTicketsQuery {
   @IsOptional() @IsUUID() stationId?: string;
   @IsOptional() @IsIn(['active', 'done']) view?: 'active' | 'done';
@@ -73,7 +84,7 @@ class ClaimDto { @IsOptional() @IsInt() @Min(1) @Max(20) limit?: number; }
 class JobResultDto {
   @IsIn(['PRINTED', 'SIMULATED', 'FAILED']) status: 'PRINTED' | 'SIMULATED' | 'FAILED';
   @IsOptional() @IsString() @Length(1, 500) error?: string;
-  /** false = trajna greška (npr. neispravna konfiguracija) — nema ponovnog pokušaja */
+  /** false = trajna greška (npr. neispravna konfiguracija) - nema ponovnog pokušaja */
   @IsOptional() @IsBoolean() retryable?: boolean;
 }
 
@@ -105,9 +116,10 @@ export class PrepAdminService {
   createPrinter(u: AuthUser, dto: PrinterDto) {
     this.validatePrinter(dto);
     return this.db.transaction(async (tx) => {
+      await this.assertBridge(tx, u, dto.bridgeDeviceId);
       const [p] = await tx.insert(printers).values({
         locationId: u.locationId, name: dto.name.trim(), connection: dto.connection, host: dto.host ?? null,
-        port: dto.port ?? null, windowsName: dto.windowsName ?? null, paperWidth: dto.paperWidth ?? 80,
+        port: dto.port ?? null, windowsName: dto.windowsName ?? null, paperWidth: dto.paperWidth ?? 80, bridgeDeviceId: dto.bridgeDeviceId ?? null,
       }).returning();
       await audit(tx, u, 'printer.create', 'printer', p.id, { name: p.name, connection: p.connection });
       return p;
@@ -118,6 +130,7 @@ export class PrepAdminService {
     return this.db.transaction(async (tx) => {
       const [cur] = await tx.select().from(printers).where(and(eq(printers.id, id), eq(printers.locationId, u.locationId))).for('update');
       if (!cur) throw NotFound('Štampač');
+      await this.assertBridge(tx, u, dto.bridgeDeviceId);
       // samo zaista poslata polja (polja klase DTO mogu postojati kao undefined)
       this.validatePrinter({ ...cur, ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)) });
       const [p] = await tx.update(printers).set({ ...dto, name: dto.name?.trim() ?? cur.name }).where(eq(printers.id, id)).returning();
@@ -126,10 +139,22 @@ export class PrepAdminService {
     });
   }
 
+  private async assertBridge(tx: any, u: AuthUser, id: string | null | undefined) {
+    if (!id) return;
+    const [d] = await tx.select({ id: devices.id }).from(devices)
+      .where(and(eq(devices.id, id), eq(devices.locationId, u.locationId), eq(devices.kind, 'BRIDGE')));
+    if (!d) throw Invalid('INVALID_BRIDGE', 'Print Bridge (računar) ne postoji u ovom lokalu');
+  }
+
+  async setStationOrder(u: AuthUser, ids: string[]) {
+    for (const [i, id] of ids.entries()) await this.db.update(prepStations).set({ sortOrder: i }).where(and(eq(prepStations.id, id), eq(prepStations.locationId, u.locationId)));
+    return this.listStations(u);
+  }
+
   async listStations(u: AuthUser) {
     return this.db.select({ s: prepStations, printerName: printers.name }).from(prepStations)
       .leftJoin(printers, eq(printers.id, prepStations.printerId))
-      .where(eq(prepStations.locationId, u.locationId)).orderBy(asc(prepStations.name))
+      .where(eq(prepStations.locationId, u.locationId)).orderBy(asc(prepStations.sortOrder), asc(prepStations.name))
       .then((rows) => rows.map((r) => ({ ...r.s, printerName: r.printerName })));
   }
 
@@ -244,41 +269,205 @@ export class PrepAdminService {
    * Štampa računa na štampaču ove kase. Sadržaj nosi stanje fiskalizacije:
    * bez potvrđenog (SIGNED) fiskalnog odgovora, ili sa TEST provajderom, na papiru piše da račun NIJE fiskalni.
    */
-  async printReceipt(u: AuthUser, orderId: string, dto: PrintReceiptDto) {
-    if (!u.deviceId) throw Conflict('NO_DEVICE', 'Štampa računa je moguća samo sa registrovane kase');
-    const [dev] = await this.db.select({ printerId: devices.receiptPrinterId }).from(devices).where(eq(devices.id, u.deviceId));
-    if (!dev?.printerId) throw Conflict('NO_RECEIPT_PRINTER', 'Za ovu kasu nije podešen štampač računa (ADMIN → Štampa)');
-    const [o] = await this.db.select({ o: orders, waiter: users.fullName, table: diningTables.name, location: locations.name })
-      .from(orders).innerJoin(users, eq(users.id, orders.waiterId)).innerJoin(locations, eq(locations.id, orders.locationId))
-      .leftJoin(diningTables, eq(diningTables.id, orders.tableId))
-      .where(and(eq(orders.id, orderId), eq(orders.locationId, u.locationId)));
-    if (!o) throw NotFound('Porudžbina');
-    if (o.o.waiterId !== u.userId && !u.permissions.includes(P.ORDER_READ_ALL)) throw NotFound('Porudžbina');
-    const dedupeKey = `receipt:${orderId}:${dto.idempotencyKey}`;
+  /**
+   * Štampa pazara (specifikacija smene zaposlenog) na štampaču računa ove kase - pri razduživanju konobara.
+   * Štampa se smena prijavljenog (onoga čiji je PIN); bez otvorene smene štampa se poslednja zatvorena u danu.
+   */
+  async printShiftReport(u: AuthUser, dto: PrintReceiptDto) {
+    const printerId = await this.receiptPrinter(u);
+    const [s] = await this.db.select().from(staffShifts)
+      .where(and(eq(staffShifts.locationId, u.locationId), eq(staffShifts.userId, u.userId)))
+      .orderBy(desc(staffShifts.startedAt)).limit(1);
+    if (!s) throw Conflict('NO_STAFF_SHIFT', 'Nemate smenu za štampu pazara');
+    return this.printStaffShift(u, printerId, s, dto.idempotencyKey);
+  }
+
+  /** Kraj dana: pazar svih zaposlenih iz otvorene smene (dana), svaki na svom isečku. */
+  async printAllShifts(u: AuthUser, dto: PrintReceiptDto) {
+    const printerId = await this.receiptPrinter(u);
+    const [d] = await this.db.select({ id: businessDays.id }).from(businessDays)
+      .where(and(eq(businessDays.locationId, u.locationId), eq(businessDays.status, 'OPEN')));
+    if (!d) throw Conflict('DAY_NOT_OPEN', 'Nema otvorene smene');
+    const list = await this.db.select().from(staffShifts).where(eq(staffShifts.businessDayId, d.id)).orderBy(asc(staffShifts.startedAt));
+    const jobs = [];
+    for (const s of list) jobs.push((await this.printStaffShift(u, printerId, s, dto.idempotencyKey)).job);
+    return { jobs };
+  }
+
+  /**
+   * Specifikacija pazara za smenu (ADMIN → Smena): štampa na izabrani štampač lokala.
+   * Ukupno po načinu plaćanja, broj računa, storna i pazar po kategoriji (Šank, Kuhinja…).
+   */
+  async printDay(u: AuthUser, dayId: string, dto: PrintDayDto) {
+    const [d] = await this.db.select().from(businessDays).where(and(eq(businessDays.id, dayId), eq(businessDays.locationId, u.locationId)));
+    if (!d) throw NotFound('Smena');
+    const [pr] = await this.db.select({ id: printers.id }).from(printers)
+      .where(and(eq(printers.id, dto.printerId), eq(printers.locationId, u.locationId), eq(printers.active, true)));
+    if (!pr) throw Invalid('INVALID_PRINTER', 'Štampač ne postoji ili nije aktivan');
+    const sales: any = d.status === 'CLOSED' && (d.summary as any)?.sales ? (d.summary as any).sales : await computeSales(this.db, u.locationId, { kind: 'day', businessDayId: d.id });
+    const byStation = await this.db.execute(sql`
+      SELECT coalesce(ps.name, 'Ostalo') AS name, sum(i.line_total - i.discount_amount)::numeric(14,2)::text AS amount
+      FROM order_items i JOIN orders o ON o.id = i.order_id JOIN products p ON p.id = i.product_id JOIN categories c ON c.id = p.category_id
+      LEFT JOIN prep_stations ps ON ps.id = coalesce(i.prep_station_id, p.prep_station_id, c.prep_station_id)
+      WHERE o.business_day_id = ${d.id} AND o.status = 'PAID' AND i.status <> 'VOIDED' GROUP BY 1 ORDER BY 2 DESC`);
+    const [loc] = await this.db.select({ name: locations.name }).from(locations).where(eq(locations.id, u.locationId));
+    const payload = {
+      title: 'SPECIFIKACIJA PAZARA', location: loc?.name, waiter: `Smena ${d.name} ${d.date.split('-').reverse().join('.')}.`,
+      startedAt: d.openedAt, endedAt: d.closedAt, createdAt: new Date().toISOString(),
+      byMethod: sales.payments.byMethod.map((m: any) => ({ method: m.method, count: m.count, amount: m.amount })),
+      total: sales.payments.total, cashToHandOver: sales.payments.byMethod.filter((m: any) => m.method === 'CASH').reduce((a: number, m: any) => a + Number(m.amount), 0).toFixed(2),
+      receipts: { count: sales.sales.orders, amount: sales.sales.gross }, voids: sales.voids ?? { count: 0, amount: '0.00' }, openOrders: 0,
+      byStation: byStation.rows, notice: 'TEST REŽIM - NIJE FISKALNI DOKUMENT',
+    };
+    const [j] = await this.db.insert(printJobs).values({
+      locationId: u.locationId, printerId: pr.id, orderId: null, kind: 'SHIFT_REPORT', dedupeKey: `day:${d.id}:${dto.idempotencyKey}`, payload,
+    }).onConflictDoNothing().returning();
+    if (!j) return { job: (await this.db.select().from(printJobs).where(eq(printJobs.dedupeKey, `day:${d.id}:${dto.idempotencyKey}`)))[0], idempotentReplay: true };
+    await this.db.transaction((tx) => audit(tx, u, 'print.day_report', 'business_day', d.id, { jobId: j.id }));
+    this.events.publish({ type: 'print.job.created', locationId: u.locationId, data: { jobId: j.id, printerId: j.printerId } });
+    return { job: j, idempotentReplay: false };
+  }
+
+  /** Kraj dana - prodaja: jedan isečak (ukupno, pa Šank, crta, pa Kuhinja…) na štampaču računa ove kase. */
+  async printSales(u: AuthUser, dto: PrintReceiptDto) {
+    const printerId = await this.receiptPrinter(u);
+    const [d] = await this.db.select().from(businessDays).where(and(eq(businessDays.locationId, u.locationId), eq(businessDays.status, 'OPEN')));
+    if (!d) throw Conflict('DAY_NOT_OPEN', 'Nema otvorene smene');
+    const dedupeKey = `sales:${d.id}:${dto.idempotencyKey}`;
     const [existing] = await this.db.select().from(printJobs).where(eq(printJobs.dedupeKey, dedupeKey));
     if (existing) return { job: existing, idempotentReplay: true };
+    const stations = await soldByStation(this.db, d.id);
+    const [loc] = await this.db.select({ name: locations.name }).from(locations).where(eq(locations.id, u.locationId));
+    const sum = (l: { quantity: string; gross: string }[], k: 'quantity' | 'gross') => l.reduce((a, x) => a + Number(x[k]), 0);
+    const all = stations.flatMap((s) => s.items);
+    const payload = {
+      mode: 'SALES', title: 'PRODAJA - KRAJ DANA', location: loc?.name, waiter: `Smena ${d.name} ${d.date.split('-').reverse().join('.')}.`,
+      startedAt: d.openedAt, createdAt: new Date().toISOString(),
+      total: { quantity: sum(all, 'quantity').toFixed(3), amount: sum(all, 'gross').toFixed(2) },
+      stations: stations.map((s) => ({ name: s.name, quantity: sum(s.items, 'quantity').toFixed(3), amount: sum(s.items, 'gross').toFixed(2), items: s.items })),
+    };
+    const [j] = await this.db.insert(printJobs).values({ locationId: u.locationId, printerId, orderId: null, kind: 'SHIFT_REPORT', dedupeKey, payload }).onConflictDoNothing().returning();
+    if (!j) return { job: (await this.db.select().from(printJobs).where(eq(printJobs.dedupeKey, dedupeKey)))[0], idempotentReplay: true };
+    await this.db.transaction((tx) => audit(tx, u, 'print.day_sales', 'business_day', d.id, { jobId: j.id }));
+    this.events.publish({ type: 'print.job.created', locationId: u.locationId, data: { jobId: j.id, printerId: j.printerId } });
+    return { job: j, idempotentReplay: false };
+  }
 
+  private async receiptPrinter(u: AuthUser) {
+    if (!u.deviceId) throw Conflict('NO_DEVICE', 'Štampa je moguća samo sa registrovane kase');
+    const [dev] = await this.db.select({ printerId: devices.receiptPrinterId }).from(devices).where(eq(devices.id, u.deviceId));
+    if (!dev?.printerId) throw Conflict('NO_RECEIPT_PRINTER', 'Za ovu kasu nije podešen štampač računa (ADMIN → Štampa)');
+    return dev.printerId;
+  }
+
+  private async printStaffShift(u: AuthUser, printerId: string, s: typeof staffShifts.$inferSelect, idempotencyKey: string) {
+    const dedupeKey = `shift:${s.id}:${idempotencyKey}`;
+    const [existing] = await this.db.select().from(printJobs).where(eq(printJobs.dedupeKey, dedupeKey));
+    if (existing) return { job: existing, idempotentReplay: true };
+    const sum: any = s.status === 'CLOSED' && s.summary ? s.summary : await staffShiftSummary(this.db, s);
+    const [loc] = await this.db.select({ name: locations.name }).from(locations).where(eq(locations.id, u.locationId));
+    const payload = {
+      title: s.status === 'OPEN' ? 'PRESEK STANJA - PAZAR' : 'PAZAR - SMENA ZAVRŠENA',
+      location: loc?.name, waiter: sum.fullName ?? u.userId, startedAt: sum.startedAt, endedAt: sum.endedAt ?? null,
+      createdAt: new Date().toISOString(),
+      byMethod: sum.collected.byMethod, total: sum.collected.total, cashToHandOver: sum.collected.cashToHandOver,
+      receipts: sum.closedReceipts, voids: sum.voids, openOrders: (sum.openOrders ?? []).length, byStation: sum.byStation ?? [],
+      notice: 'TEST REŽIM - NIJE FISKALNI DOKUMENT',
+    };
+    const [j] = await this.db.insert(printJobs).values({
+      locationId: u.locationId, printerId, orderId: null, kind: 'SHIFT_REPORT', dedupeKey, payload,
+    }).onConflictDoNothing().returning();
+    if (!j) {
+      const [again] = await this.db.select().from(printJobs).where(eq(printJobs.dedupeKey, dedupeKey));
+      return { job: again, idempotentReplay: true };
+    }
+    await this.db.transaction((tx) => audit(tx, u, 'print.shift_report', 'staff_shift', s.id, { jobId: j.id }));
+    this.events.publish({ type: 'print.job.created', locationId: u.locationId, data: { jobId: j.id, printerId: j.printerId } });
+    return { job: j, idempotentReplay: false };
+  }
+
+  /** Sadržaj (payload) računa za štampu; asOriginal = pregled kako je račun izgledao (bez oznake KOPIJA). */
+  private async receiptPayload(u: AuthUser, orderId: string, o: { o: typeof orders.$inferSelect; waiter: string; table: string | null; location: string }, printCfg: ReturnType<typeof deviceSettings>['print'], asOriginal = false) {
     const items = await this.db.select().from(orderItems)
       .where(and(eq(orderItems.orderId, orderId), ne(orderItems.status, 'VOIDED'))).orderBy(asc(orderItems.createdAt));
     const pays = await this.db.select().from(payments).where(eq(payments.orderId, orderId)).orderBy(asc(payments.createdAt));
     const [f] = await this.db.select().from(fiscalReceipts).where(eq(fiscalReceipts.orderId, orderId));
     const fiscal = f ? fiscalSummary(f) : null;
     const isFiscal = !!fiscal && fiscal.status === 'SIGNED' && !fiscal.isTest;
-    const [{ copies }] = await this.db.select({ copies: sql<number>`count(*)::int` }).from(printJobs)
-      .where(and(eq(printJobs.orderId, orderId), eq(printJobs.kind, 'RECEIPT')));
+    const st = await locationSettings(this.db, u.locationId);
+    const [{ copies: printed }] = await this.db.select({ copies: sql<number>`count(*)::int` }).from(printJobs)
+      .where(and(eq(printJobs.orderId, orderId), eq(printJobs.kind, 'RECEIPT'), like(printJobs.dedupeKey, 'receipt:%')));
+    const copies = asOriginal ? 0 : printed;
+    const representation = pays.length > 0 && pays.every((p) => p.method === 'REPRESENTATION');
+    const fiscalLayout = await this.receiptLayout(u, o.o, items, f ?? null, { isFiscal, copy: copies > 0, st, waiter: o.waiter, location: o.location, representation, houseNote: pays[0]?.note });
     const payload = {
       title: o.o.status === 'PAID' ? 'RAČUN' : 'PREDRAČUN',
       location: o.location, orderNumber: o.o.number, table: o.table, tab: o.o.tabName, waiter: o.waiter,
       createdAt: new Date().toISOString(),
-      lines: items.map((i) => ({ qty: i.quantity, name: i.name, unitPrice: i.unitPrice, total: i.lineTotal, taxLabel: i.taxLabel })),
+      lines: items.map((i) => ({ qty: i.quantity, name: i.name, unitPrice: i.unitPrice, total: i.lineTotal, discount: i.discountAmount, taxLabel: ({ 'Đ': 'Ђ', 'E': 'Е', 'A': 'А', 'G': 'Г', 'Ž': 'Ж' } as Record<string, string>)[i.taxLabel] ?? i.taxLabel })),
       subtotal: o.o.subtotal, discount: o.o.discountTotal, total: o.o.total,
-      payments: pays.map((p) => ({ method: p.method, amount: p.amount, change: p.change })),
+      payments: pays.map((p) => ({ method: p.method, amount: p.amount, change: p.change, note: p.note })),
       fiscal: fiscal ? { status: fiscal.status, invoiceNumber: fiscal.invoiceNumber, isTest: fiscal.isTest } : null,
       notFiscalNotice: isFiscal ? null
-        : fiscal?.isTest ? 'TEST — OVO NIJE FISKALNI RAČUN'
+        : fiscal?.isTest ? 'TEST - OVO NIJE FISKALNI RAČUN'
           : 'OVO NIJE FISKALNI RAČUN',
       copy: copies > 0,
+      // Izgled isečka (ADMIN → Štampanje → Izgled isečka)
+      header: st.receiptHeader || null,
+      // tekst i slika na kraju: samo u izabranom periodu (prazno = uvek) i ako ih ovaj računar štampa
+      ...(() => {
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Belgrade' }).format(new Date());
+        const on = printCfg.footerOnReceipt && (!st.receiptExtraFrom || today >= st.receiptExtraFrom) && (!st.receiptExtraTo || today <= st.receiptExtraTo);
+        return { footer: on ? st.receiptFooter || null : null, footerImage: on ? st.receiptFooterImage ?? null : null };
+      })(),
+      logo: printCfg.logoOnReceipt ? st.receiptLogo : null,
+      repStyle: representation ? st.representationPrint : null,
+      fiscalLayout: representation && st.representationPrint !== 'SLIP' ? { ...fiscalLayout, representationNote: 'ОВО ЈЕ ФИСКАЛНИ РАЧУН - РЕПРЕЗЕНТАЦИЈА' } : fiscalLayout,
     };
+    return payload;
+  }
+
+  /** Pregled računa u ADMIN-u (Pretraga računa): isti tekst kao na odštampanom isečku. */
+  async previewReceipt(u: AuthUser, orderId: string) {
+    const o = await this.receiptOrder(u, orderId);
+    const [pd] = o.o.deviceId ? await this.db.select({ settings: devices.settings }).from(devices).where(eq(devices.id, o.o.deviceId)) : [];
+    // ADMIN ga iscrtava istim kodom kao Print Bridge (print-bridge/src/render.ts)
+    return { payload: await this.receiptPayload(u, orderId, o, deviceSettings(pd?.settings).print, true) };
+  }
+
+  private async receiptOrder(u: AuthUser, orderId: string) {
+    const [o] = await this.db.select({ o: orders, waiter: users.fullName, table: diningTables.name, location: locations.name })
+      .from(orders).innerJoin(users, eq(users.id, orders.waiterId)).innerJoin(locations, eq(locations.id, orders.locationId))
+      .leftJoin(diningTables, eq(diningTables.id, orders.tableId))
+      .where(and(eq(orders.id, orderId), eq(orders.locationId, u.locationId)));
+    if (!o) throw NotFound('Porudžbina');
+    if (o.o.waiterId !== u.userId && !u.permissions.includes(P.ORDER_READ_ALL)) throw NotFound('Porudžbina');
+    return o;
+  }
+
+  async printReceipt(u: AuthUser, orderId: string, dto: PrintReceiptDto) {
+    const o = await this.receiptOrder(u, orderId);
+    // štampač: izabran (ADMIN), pa štampač računa ove kase, pa kase na kojoj je račun izdat (kopija iz ADMIN-a)
+    let printerId = dto.printerId ?? null;
+    const printDevId = u.deviceId ?? o.o.deviceId;
+    const [pd] = printDevId ? await this.db.select({ settings: devices.settings }).from(devices).where(eq(devices.id, printDevId)) : [];
+    const printCfg = deviceSettings(pd?.settings).print;
+    if (printerId) {
+      const [pr] = await this.db.select({ id: printers.id }).from(printers).where(and(eq(printers.id, printerId), eq(printers.locationId, u.locationId)));
+      if (!pr) throw NotFound('Štampač');
+    } else {
+      const devId = u.deviceId ?? o.o.deviceId;
+      if (!devId) throw Conflict('NO_DEVICE', 'Izaberite štampač za račun');
+      const [dev] = await this.db.select({ printerId: devices.receiptPrinterId }).from(devices).where(eq(devices.id, devId));
+      printerId = dev?.printerId ?? null;
+    }
+    if (!printerId) throw Conflict('NO_RECEIPT_PRINTER', 'Za ovu kasu nije podešen štampač računa (ADMIN → Računari)');
+    const dev = { printerId };
+    const dedupeKey = `receipt:${orderId}:${dto.idempotencyKey}`;
+    const [existing] = await this.db.select().from(printJobs).where(eq(printJobs.dedupeKey, dedupeKey));
+    if (existing) return { job: existing, idempotentReplay: true };
+
+    const payload = await this.receiptPayload(u, orderId, o, printCfg);
     const [j] = await this.db.insert(printJobs).values({
       locationId: u.locationId, printerId: dev.printerId, orderId, kind: 'RECEIPT', dedupeKey, payload,
     }).onConflictDoNothing().returning();
@@ -289,6 +478,58 @@ export class PrepAdminService {
     await this.db.transaction((tx) => audit(tx, u, 'print.receipt', 'order', orderId, { jobId: j.id, copy: payload.copy }));
     this.events.publish({ type: 'print.job.created', locationId: u.locationId, data: { jobId: j.id, printerId: j.printerId } });
     return { job: j, idempotentReplay: false };
+  }
+
+  /**
+   * Sadržaj računa u rasporedu Poreske uprave: zaglavlje (PIB, firma, prodajno mesto, adresa, mesto), kasir, ESIR,
+   * vrsta prometa (ПРОМЕТ / КОПИЈА / ОБУКА / ПРЕДРАЧУН + ПРОДАЈА), porezi po oznakama, PFR podaci i brojač.
+   * Stvarni fiskalni račun (LIVE) dobija ove podatke iz odgovora PFR-a; do tada TEST adapter (ОБУКА).
+   */
+  private async receiptLayout(u: AuthUser, o: typeof orders.$inferSelect, items: (typeof orderItems.$inferSelect)[], f: typeof fiscalReceipts.$inferSelect | null,
+    x: { isFiscal: boolean; copy: boolean; st: Awaited<ReturnType<typeof locationSettings>>; waiter: string; location: string; representation?: boolean; houseNote?: string | null }) {
+    const [info] = (await this.db.execute(sql`
+      SELECT org.name AS company, org.tax_id AS pib, l.address, cu.full_name AS cashier
+      FROM locations l JOIN organizations org ON org.id = l.organization_id
+      LEFT JOIN users cu ON cu.id = ${o.closedById ?? null}::uuid
+      WHERE l.id = ${u.locationId}`)).rows as { company: string; pib: string | null; address: string | null; cashier: string | null }[];
+    const LABEL: Record<string, string> = { 'Đ': 'Ђ', 'E': 'Е', 'A': 'А', 'G': 'Г', 'Ž': 'Ж' };
+    const NAME = (rate: number) => (rate >= 20 ? 'О-ПДВ' : rate > 0 ? 'П-ПДВ' : 'Без ПДВ');
+    const byLabel = new Map<string, { label: string; rate: string; gross: ReturnType<typeof dec> }>();
+    for (const i of items) {
+      const k = i.taxLabel;
+      const g = byLabel.get(k) ?? { label: LABEL[k] ?? k, rate: i.taxRate, gross: dec(0) };
+      g.gross = g.gross.add(dec(i.lineTotal).sub(dec(i.discountAmount)));
+      byLabel.set(k, g);
+    }
+    const taxes = [...byLabel.values()].map((t) => ({
+      label: t.label, name: NAME(Number(t.rate)), rate: t.rate,
+      tax: money(t.gross.mul(dec(t.rate)).div(dec(100).add(dec(t.rate))).toDecimalPlaces(2)),
+    }));
+    const taxTotal = money(taxes.reduce((a, t) => a.add(dec(t.tax)), dec(0)));
+    const kind = o.status !== 'PAID' ? 'ПРЕДРАЧУН' : x.copy ? 'КОПИЈА' : x.isFiscal ? 'ПРОМЕТ' : 'ОБУКА';
+    const suffix = { ПРОМЕТ: 'ПП', КОПИЈА: 'КП', ОБУКА: 'ОП', ПРЕДРАЧУН: 'ПР' }[kind];
+    let counter: string | null = null;
+    const pfrCounter = (f?.response as { invoiceCounter?: string } | null)?.invoiceCounter;
+    if (pfrCounter && !x.copy) counter = pfrCounter; // pravi PFR: brojač iz odgovora (npr. 100/120ПП)
+    else if (f) {
+      const [c] = (await this.db.execute(sql`SELECT count(*) FILTER (WHERE transaction_type = ${f.transactionType})::int AS t, count(*)::int AS a
+        FROM fiscal_receipts WHERE location_id = ${u.locationId} AND created_at <= ${f.createdAt}`)).rows as { t: number; a: number }[];
+      counter = `${c.t}/${c.a}${suffix}`;
+    }
+    const st = x.st;
+    const [street, ...rest] = (info?.address ?? '').split(',').map((s) => s.trim());
+    return {
+      isFiscal: x.isFiscal && !x.copy && o.status === 'PAID',
+      pib: st.pib || info?.pib || '', company: st.companyName || info?.company || '', store: st.storeName || x.location,
+      address: st.address || street || '', city: st.city || rest.join(', ') || '',
+      cashier: info?.cashier ?? x.waiter, esir: st.esirNumber || '', extra: [st.registrationNo && `МБ: ${st.registrationNo}`, st.bankAccount && `Жиро рачун: ${st.bankAccount}`, st.phone && `Тел: ${st.phone}`, st.email, st.website].filter(Boolean), buyerId: o.buyerId ? `${o.buyerIdType}:${o.buyerId}` : null,
+      // Reprezentacija (na kuću): regularan fiskalni račun po PU (u pazaru posebna stavka; lokal je pravda potpisom na poleđini)
+      representation: false,
+      transaction: `${kind} ПРОДАЈА`,
+      taxes, taxTotal,
+      pfrTime: f?.signedAt?.toISOString() ?? null, pfrNumber: f?.invoiceNumber ?? null, counter,
+      qr: f?.verificationUrl ?? null,
+    };
   }
 }
 
@@ -305,11 +546,20 @@ const TRANSITIONS: Record<string, string[]> = {
 export class KdsService {
   constructor(@Inject(DB) private readonly db: Db, private readonly events: EventBus) {}
 
-  stations(u: AuthUser) {
-    return this.db.select({ id: prepStations.id, name: prepStations.name, kind: prepStations.kind })
+  /** Pozicije sa KDS-om i grupe koje idu na svaku (za podešavanje prikaza grupa na KDS ekranu). */
+  async stations(u: AuthUser) {
+    const list = await this.db.select({ id: prepStations.id, name: prepStations.name, kind: prepStations.kind })
       .from(prepStations)
       .where(and(eq(prepStations.locationId, u.locationId), eq(prepStations.active, true), eq(prepStations.kdsEnabled, true)))
       .orderBy(asc(prepStations.name));
+    if (!list.length) return [];
+    const r = await this.db.execute(sql`SELECT DISTINCT s.id AS "stationId", c.id, c.name, c.sort_order
+      FROM prep_stations s JOIN categories c ON c.organization_id = ${u.organizationId} AND c.active
+      LEFT JOIN products p ON p.category_id = c.id AND p.active
+      WHERE s.location_id = ${u.locationId} AND (c.prep_station_id = s.id OR p.prep_station_id = s.id)
+      ORDER BY c.sort_order, c.name`);
+    const groups = r.rows as { stationId: string; id: string; name: string }[];
+    return list.map((st) => ({ ...st, groups: groups.filter((g) => g.stationId === st.id).map(({ id, name }) => ({ id, name })) }));
   }
 
   async tickets(u: AuthUser, q: KdsTicketsQuery, ids?: string[]) {
@@ -317,7 +567,11 @@ export class KdsService {
     if (q.stationId) conds.push(eq(kdsTickets.stationId, q.stationId));
     if (ids) conds.push(inArray(kdsTickets.id, ids));
     else if (q.view === 'done') conds.push(eq(kdsTickets.status, 'DONE'));
-    else conds.push(ne(kdsTickets.status, 'DONE'));
+    else {
+      conds.push(ne(kdsTickets.status, 'DONE'));
+      // Kartice iz zatvorenih smena ne ostaju na ekranu (inače bi se gomilale od dana do dana).
+      conds.push(sql`NOT EXISTS (SELECT 1 FROM business_days bd WHERE bd.id = "orders"."business_day_id" AND bd.status = 'CLOSED')`);
+    }
     const rows = await this.db.select({
       t: kdsTickets, orderNumber: orders.number, tabName: orders.tabName, orderStatus: orders.status,
       table: diningTables.name, waiter: users.fullName, station: prepStations.name,
@@ -334,7 +588,9 @@ export class KdsService {
       ? await this.db.select({
         id: orderItems.id, ticketId: orderItems.kdsTicketId, name: orderItems.name, quantity: orderItems.quantity,
         note: orderItems.note, status: orderItems.status, readyAt: orderItems.readyAt, voidReason: orderItems.voidReason,
-      }).from(orderItems).where(inArray(orderItems.kdsTicketId, tIds)).orderBy(asc(orderItems.createdAt))
+        categoryId: products.categoryId,
+      }).from(orderItems).innerJoin(products, eq(products.id, orderItems.productId))
+        .where(inArray(orderItems.kdsTicketId, tIds)).orderBy(asc(orderItems.createdAt))
       : [];
     return rows.map((r) => ({
       ...r.t, orderNumber: r.orderNumber, tabName: r.tabName, orderStatus: r.orderStatus, table: r.table,
@@ -352,7 +608,7 @@ export class KdsService {
       const [cur] = await tx.select().from(kdsTickets)
         .where(and(eq(kdsTickets.id, id), eq(kdsTickets.locationId, u.locationId))).for('update');
       if (!cur) throw NotFound('KDS kartica');
-      if (cur.status === dto.status) return cur; // ponovljen zahtev (npr. dvostruki dodir) — bez promene
+      if (cur.status === dto.status) return cur; // ponovljen zahtev (npr. dvostruki dodir) - bez promene
       if (!TRANSITIONS[cur.status].includes(dto.status)) {
         throw Conflict('INVALID_TRANSITION', `Prelaz ${cur.status} → ${dto.status} nije dozvoljen`);
       }
@@ -445,6 +701,8 @@ export class BridgeService {
       WHERE j.id IN (
         SELECT id FROM print_jobs
         WHERE location_id = ${b.locationId}
+          -- štampač priključen na određeni računar štampa samo Print Bridge tog računara; mrežni (bez računara) bilo koji
+          AND printer_id IN (SELECT p.id FROM printers p WHERE p.bridge_device_id IS NULL OR p.bridge_device_id = ${b.id})
           AND ((status = 'PENDING' AND next_attempt_at <= now())
             OR (status = 'PRINTING' AND claimed_at < now() - make_interval(secs => ${CLAIM_TIMEOUT_SEC})))
         ORDER BY created_at
@@ -470,7 +728,7 @@ export class BridgeService {
       const [cur] = await tx.select().from(printJobs).where(and(eq(printJobs.id, id), eq(printJobs.locationId, b.locationId))).for('update');
       if (!cur) throw NotFound('Zadatak štampe');
       if (cur.status !== 'PRINTING' || cur.claimedByDeviceId !== b.id) {
-        // Ponovljen rezultat istog bridge-a za već završen zadatak — idempotentno vraćamo stanje.
+        // Ponovljen rezultat istog bridge-a za već završen zadatak - idempotentno vraćamo stanje.
         if (cur.claimedByDeviceId === b.id && ['PRINTED', 'SIMULATED', 'FAILED'].includes(cur.status)) return cur;
         throw Conflict('JOB_NOT_CLAIMED', 'Zadatak nije u štampi kod ovog bridge-a (možda je istekao zakup)');
       }
@@ -510,6 +768,10 @@ export class PrepAdminController {
 
   @Get('prep-stations') @RequirePermissions(P.CATALOG_READ)
   stations(@CurrentUser() u: AuthUser) { return this.svc.listStations(u); }
+  @Put('prep-stations/order') @HttpCode(200) @RequirePermissions(P.SETTINGS_MANAGE)
+  async stationOrder(@CurrentUser() u: AuthUser, @Body() dto: StationOrderDto) {
+    return this.svc.setStationOrder(u, dto.ids);
+  }
   @Post('prep-stations') @RequirePermissions(P.SETTINGS_MANAGE)
   createStation(@CurrentUser() u: AuthUser, @Body() dto: StationDto) { return this.svc.createStation(u, dto); }
   @Patch('prep-stations/:id') @RequirePermissions(P.SETTINGS_MANAGE)
@@ -531,9 +793,32 @@ export class PrepAdminController {
   @Post('print-jobs/:id/retry') @HttpCode(200) @RequirePermissions(P.SETTINGS_MANAGE)
   retry(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string) { return this.svc.retryJob(u, id); }
 
+  @Get('orders/:id/receipt-preview') @RequirePermissions(P.ORDER_READ)
+  receiptPreview(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string) { return this.svc.previewReceipt(u, id); }
+
   @Post('orders/:id/print-receipt') @RequirePermissions(P.ORDER_READ)
   printReceipt(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: PrintReceiptDto) {
     return this.svc.printReceipt(u, id, dto);
+  }
+
+  @Post('business-days/:id/print') @RequirePermissions(P.REPORT_READ)
+  printDay(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: PrintDayDto) {
+    return this.svc.printDay(u, id, dto);
+  }
+
+  @Post('business-days/current/print-sales') @RequirePermissions(P.DAY_MANAGE)
+  printSales(@CurrentUser() u: AuthUser, @Body() dto: PrintReceiptDto) {
+    return this.svc.printSales(u, dto);
+  }
+
+  @Post('business-days/current/print-staff') @RequirePermissions(P.DAY_MANAGE)
+  printAll(@CurrentUser() u: AuthUser, @Body() dto: PrintReceiptDto) {
+    return this.svc.printAllShifts(u, dto);
+  }
+
+  @Post('staff-shifts/current/print') @RequirePermissions(P.ORDER_READ)
+  printShift(@CurrentUser() u: AuthUser, @Body() dto: PrintReceiptDto) {
+    return this.svc.printShiftReport(u, dto);
   }
 }
 

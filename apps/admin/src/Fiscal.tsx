@@ -5,7 +5,7 @@ import { Empty, ErrorBox, Spinner, useLoad, useToast } from '@shared/ui';
 interface Row { id: string; orderId: string; orderNumber: number; total: string; provider: string; isTest: boolean; status: string; invoiceNumber: string | null; attempts: number; lastError: string | null; signedAt: string | null; createdAt: string }
 const STATUS: Record<string, string> = { PENDING: 'Na čekanju', SIGNED: 'Potpisano', FAILED: 'Neuspešno', NOT_REQUIRED: 'Nije potrebno' };
 
-/** Pregled fiskalnog reda. Stvarna fiskalizacija (PFR/ESIR) ne postoji — samo TEST adapter. */
+/** Pregled fiskalnog reda. Stvarna fiskalizacija (PFR/ESIR) ne postoji - samo TEST adapter. */
 export function Fiscal() {
   const toast = useToast();
   const [status, setStatus] = useState('');
@@ -17,7 +17,6 @@ export function Fiscal() {
   const st = list.data?.status;
   return (
     <div className="page">
-      <div className="toolbar"><h2 style={{ margin: 0, flex: 1 }}>Fiskalizacija</h2></div>
       {st && (st.mode === 'TEST'
         ? <div className="test-banner">TEST REŽIM: fiskalni provajder je testni adapter. Brojevi računa počinju sa „TEST-“ i NISU fiskalni računi. Integracija sa PFR/ESIR sistemom Poreske uprave ne postoji.</div>
         : st.mode === 'DISABLED' ? <div className="notice warn">Fiskalizacija je isključena (FISCAL_PROVIDER=NONE). Računi se ne šalju nikome.</div> : null)}
@@ -37,7 +36,7 @@ export function Fiscal() {
               <td>#{r.orderNumber}</td><td className="num">{fmt(r.total)}</td>
               <td><span className={`badge ${r.status === 'FAILED' ? 'cancelled' : r.status === 'SIGNED' ? 'paid' : ''}`}>{STATUS[r.status] ?? r.status}</span>{r.isTest && <span className="badge"> TEST</span>}
                 {r.lastError && <div className="warn-text small">{r.lastError}</div>}</td>
-              <td><code>{r.invoiceNumber ?? '—'}</code></td>
+              <td><code>{r.invoiceNumber ?? '-'}</code></td>
               <td className="num">{r.attempts}</td>
               <td>{new Date(r.signedAt ?? r.createdAt).toLocaleString('sr-Latn-RS')}</td>
               <td>{r.status === 'FAILED' && <button className="btn sm" onClick={() => retry(r)}>Ponovi</button>}</td>

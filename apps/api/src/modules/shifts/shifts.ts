@@ -2,10 +2,10 @@ import {
   Body, Controller, Get, HttpCode, Inject, Injectable, Module, Param, ParseUUIDPipe, Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsString, Length, Matches } from 'class-validator';
+import { IsIn, IsOptional, IsString, Length, Matches } from 'class-validator';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { DB, Db, DbOrTx } from '../../db/db.module';
-import { cashMovements, cashShifts, payments } from '../../db/schema';
+import { cashMovements, cashShifts, orders, payments } from '../../db/schema';
 import { AuthUser, CurrentUser, RequirePermissions } from '../../common/auth-context';
 import { P } from '../../common/permissions';
 import { audit } from '../../common/audit';
@@ -19,7 +19,8 @@ class OpenShiftDto {
   @Matches(AMOUNT_RE, { message: 'Početna gotovina mora biti decimalni iznos (npr. "5000.00")' }) openingCash: string;
 }
 class CloseShiftDto {
-  @Matches(AMOUNT_RE) countedCash: string;
+  /** Prebrojana gotovina; ako se izostavi, uzima se očekivana (kasa bez prebrojavanja pri zatvaranju). */
+  @IsOptional() @Matches(AMOUNT_RE) countedCash?: string;
 }
 class CashMovementDto {
   @IsIn(['PAY_IN', 'PAY_OUT']) type: 'PAY_IN' | 'PAY_OUT';
@@ -107,12 +108,40 @@ export class ShiftsService {
     });
   }
 
+  /** Nenaplaćeni računi u lokalu (svih konobara) — šta blokira zatvaranje smene. */
+  async closeCheck(u: AuthUser) {
+    const r = await this.db.execute(sql`
+      SELECT o.id, o.number, o.total::text AS total, t.name AS "tableName", o.tab_name AS "tabName", us.full_name AS "waiterName"
+      FROM orders o JOIN users us ON us.id = o.waiter_id LEFT JOIN dining_tables t ON t.id = o.table_id
+      WHERE o.location_id = ${u.locationId} AND o.status = 'OPEN' AND NOT coalesce(t.is_room, false)
+        AND EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id)
+      ORDER BY o.opened_at`);
+    return { openOrders: r.rows };
+  }
+
   async close(u: AuthUser, dto: CloseShiftDto) {
     return this.db.transaction(async (tx) => {
       const s = await findOpenShift(tx, u, true);
       if (!s) throw Conflict('NO_OPEN_SHIFT', 'Nema otvorene smene na ovoj kasi');
+      // Smena se ne zatvara dok u lokalu postoji nenaplaćen sto (račun sa stavkama).
+      // Prazni računi (otvoren sto bez ijednog artikla) se pri tome samo zatvaraju.
+      const open = await tx.select({ id: orders.id, number: orders.number,
+        items: sql<number>`(select count(*)::int from order_items oi where oi.order_id = "orders"."id")`,
+        room: sql<boolean>`exists (select 1 from dining_tables t where t.id = "orders"."table_id" and t.is_room)` })
+        .from(orders).where(and(eq(orders.locationId, u.locationId), eq(orders.status, 'OPEN')));
+      // hotelske sobe ne blokiraju zatvaranje (gost plaća pri odjavi)
+      const unpaid = open.filter((o) => o.items > 0 && !o.room);
+      if (unpaid.length) {
+        throw Conflict('SHIFT_HAS_OPEN_ORDERS', `Smena ne može da se zatvori: ${unpaid.length} nenaplaćen${unpaid.length === 1 ? ' sto' : 'ih stolova'}. Svi stolovi moraju biti naplaćeni.`,
+          { openOrders: unpaid.map((o) => o.number) });
+      }
+      for (const o of open.filter((x) => x.items === 0)) {
+        // samo prazni računi otvoreni na ovoj kasi (drugi konobari upravo otvaraju svoje stolove)
+        await tx.update(orders).set({ status: 'CANCELLED', closedAt: new Date(), closedById: u.userId, updatedAt: new Date(), version: sql`${orders.version} + 1` })
+          .where(and(eq(orders.id, o.id), eq(orders.deviceId, s.deviceId)));
+      }
       const sum = await this.summary(tx, s.id);
-      const counted = dec(dto.countedCash);
+      const counted = dec(dto.countedCash ?? sum.expectedCash);
       const [closed] = await tx.update(cashShifts).set({
         status: 'CLOSED', closedById: u.userId, closedAt: new Date(),
         expectedCash: sum.expectedCash, countedCash: money(counted),
@@ -154,6 +183,10 @@ export class ShiftsController {
 
   @Post('current/cash-movements') @RequirePermissions(P.SHIFT_MANAGE)
   movement(@CurrentUser() u: AuthUser, @Body() dto: CashMovementDto) { return this.svc.movement(u, dto); }
+
+  /** Pre zatvaranja smene: nenaplaćeni računi u lokalu (svih konobara), da kasa odmah pokaže šta blokira zatvaranje. */
+  @Get('close-check') @RequirePermissions(P.ORDER_READ)
+  closeCheck(@CurrentUser() u: AuthUser) { return this.svc.closeCheck(u); }
 
   @Post('close') @HttpCode(200) @RequirePermissions(P.SHIFT_MANAGE)
   close(@CurrentUser() u: AuthUser, @Body() dto: CloseShiftDto) { return this.svc.close(u, dto); }

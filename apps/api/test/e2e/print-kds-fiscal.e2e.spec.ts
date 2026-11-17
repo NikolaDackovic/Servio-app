@@ -31,7 +31,7 @@ beforeAll(async () => {
   unrouted = (await ctx.http().post(api('/products')).set(auth(admin)).send({
     categoryId: cat.id, taxRateId: taxes[0].id, code: 'X001', name: 'Cigarete', price: '450.00',
   }).expect(201)).body.id;
-});
+}, 120_000);
 afterAll(() => teardown(ctx));
 
 async function order(token: string, products: string[], body: any = {}) {
@@ -44,7 +44,7 @@ const jobsOf = async (orderId: string) =>
   (await ctx.pool.query('SELECT * FROM print_jobs WHERE order_id = $1 ORDER BY created_at', [orderId])).rows;
 const ticketsOf = async (orderId: string) =>
   (await ctx.pool.query('SELECT * FROM kds_tickets WHERE order_id = $1 ORDER BY batch, station_id', [orderId])).rows;
-/** Bridge preuzima sve što čeka i javlja SIMULATED — da ne bi ostalo u redu za sledeće testove. */
+/** Bridge preuzima sve što čeka i javlja SIMULATED - da ne bi ostalo u redu za sledeće testove. */
 async function drainQueue() {
   for (;;) {
     const r = await ctx.http().post(api('/bridge/jobs/claim')).set(B()).send({ limit: 20 }).expect(200);
@@ -135,7 +135,7 @@ describe('Rutiranje i red štampe', () => {
       expect(await jobsOf(id)).toHaveLength(0);
     } finally {
       const printers = (await ctx.http().get(api('/printers')).set(auth(manager)).expect(200)).body;
-      const pk = printers.find((p: any) => p.name === 'Kuhinja – simulacija');
+      const pk = printers.find((p: any) => p.name === 'Kuhinja - simulacija');
       await ctx.http().patch(api(`/prep-stations/${ctx.ids.stations.kitchen}`)).set(auth(manager)).send({ printerId: pk.id }).expect(200);
     }
   });
@@ -257,6 +257,10 @@ describe('KDS', () => {
     const list = (await ctx.http().get(api(`/kds/tickets?stationId=${ctx.ids.stations.kitchen}`)).set(auth(kitchen)).expect(200)).body;
     expect(list.length).toBeGreaterThan(0);
     expect(list.every((t: any) => t.station === 'Kuhinja')).toBe(true);
+    // za podešavanje grupa na KDS ekranu: pozicija zna svoje grupe, stavka svoju grupu
+    const kitchenGroups = st.find((s: any) => s.name === 'Kuhinja').groups.map((g: any) => g.id);
+    expect(kitchenGroups.length).toBeGreaterThan(0);
+    expect(list.flatMap((t: any) => t.items).every((i: any) => kitchenGroups.includes(i.categoryId))).toBe(true);
   });
 
   it('statusi kartice, stavka spremna, nedozvoljen prelaz; konobar vidi status pripreme', async () => {
@@ -327,7 +331,7 @@ describe('WebSocket', () => {
     await expect(connect('token=nevazeci')).rejects.toThrow(/401/);
   });
 
-  it('kuhinja dobija samo događaje svoje pozicije; kasa (bez filtera) dobija sve događaje lokala — tek posle commit-a', async () => {
+  it('kuhinja dobija samo događaje svoje pozicije; kasa (bez filtera) dobija sve događaje lokala - tek posle commit-a', async () => {
     const k = await connect(`token=${kitchen}&stationId=${ctx.ids.stations.kitchen}`);
     const all = await connect(`token=${waiter}`);
     await wait(() => k.msgs.length > 0 && all.msgs.length > 0);
@@ -460,16 +464,23 @@ describe('Fiskalizacija (TEST adapter)', () => {
     const key = idem('print');
     const p1 = await ctx.http().post(api(`/orders/${id}/print-receipt`)).set(auth(cashier)).send({ idempotencyKey: key }).expect(201);
     expect(p1.body.idempotentReplay).toBe(false);
-    expect(p1.body.job.payload).toMatchObject({ title: 'RAČUN', notFiscalNotice: 'TEST — OVO NIJE FISKALNI RAČUN', copy: false });
+    expect(p1.body.job.payload).toMatchObject({ title: 'RAČUN', notFiscalNotice: 'TEST - OVO NIJE FISKALNI RAČUN', copy: false });
     expect(p1.body.job.payload.fiscal.invoiceNumber).toMatch(/^TEST-/);
+    // raspored Poreske uprave: TEST adapter = ОБУКА, nije fiskalni; porezi po oznakama; PFR broj i brojač
+    const fl = p1.body.job.payload.fiscalLayout;
+    expect(fl).toMatchObject({ isFiscal: false, transaction: 'ОБУКА ПРОДАЈА', pfrNumber: p1.body.job.payload.fiscal.invoiceNumber });
+    expect(fl.counter).toMatch(/^\d+\/\d+ОП$/);
+    expect(fl.taxes).toEqual([{ label: 'Ђ', name: 'О-ПДВ', rate: '20.00', tax: '30.00' }]); // 180 sa 20% → 30,00
+    expect(fl.company).toBeTruthy();
     const p2 = await ctx.http().post(api(`/orders/${id}/print-receipt`)).set(auth(cashier)).send({ idempotencyKey: key }).expect(201);
     expect(p2.body).toMatchObject({ idempotentReplay: true, job: { id: p1.body.job.id } });
     const p3 = await ctx.http().post(api(`/orders/${id}/print-receipt`)).set(auth(cashier)).send({ idempotencyKey: idem('print') }).expect(201);
     expect(p3.body.job.payload.copy).toBe(true);
+    expect(p3.body.job.payload.fiscalLayout.transaction).toBe('КОПИЈА ПРОДАЈА');
     // otvoren račun → predračun, bez fiskalnog broja
     const open = await order(waiter, [espresso]);
     const p4 = await ctx.http().post(api(`/orders/${open}/print-receipt`)).set(auth(waiter)).send({ idempotencyKey: idem('pre') });
-    expect(p4.body.job.payload).toMatchObject({ title: 'PREDRAČUN', fiscal: null, notFiscalNotice: 'OVO NIJE FISKALNI RAČUN' });
+    expect(p4.body.job.payload).toMatchObject({ title: 'PREDRAČUN', fiscal: null, notFiscalNotice: 'OVO NIJE FISKALNI RAČUN', fiscalLayout: { transaction: 'ПРЕДРАЧУН ПРОДАЈА', isFiscal: false } });
     await drainQueue();
   });
 });
@@ -507,12 +518,22 @@ describe('Print Bridge ↔ API (stvarni bridge, lažni mrežni štampač)', () =
       expect(bytes.toString('latin1')).toContain('Pljeskavica');
       expect(bytes.includes(Buffer.from([0xa6]))).toBe(true); // "Ž" iz naziva ture u CP852
       expect(fs.readdirSync(dir)).toHaveLength(1);
-      // drugi krug nema šta da radi — nema duple štampe
+      // drugi krug nema šta da radi - nema duple štampe
       expect(await bridge.tick()).toBe(0);
       expect(received).toHaveLength(1);
     } finally {
       await ctx.http().patch(api(`/prep-stations/${ctx.ids.stations.kitchen}`)).set(auth(manager)).send({ printerId: old }).expect(200);
       srv.close();
     }
+  });
+});
+
+// Poslednje u fajlu: smena se zatvara direktno u bazi.
+describe('KDS posle zatvaranja smene', () => {
+  it('kartice iz zatvorene smene nisu na aktivnom ekranu', async () => {
+    const list = () => ctx.http().get(api(`/kds/tickets?stationId=${ctx.ids.stations.kitchen}`)).set(auth(kitchen)).expect(200);
+    expect((await list()).body.length).toBeGreaterThan(0);
+    await ctx.pool.query(`UPDATE business_days SET status = 'CLOSED', closed_at = now(), closed_by_id = opened_by_id WHERE status = 'OPEN'`);
+    expect((await list()).body).toEqual([]);
   });
 });
